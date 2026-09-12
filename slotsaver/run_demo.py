@@ -33,6 +33,17 @@ from .demo_data import demo_state, real_demo_state
 from .engine import run_evening
 
 
+def _ensure_utf8_stdio() -> None:
+    """Windows: when stdout/stderr isn't a real console (piped, redirected to
+    a file, run under CI), Python falls back to the system codepage (e.g.
+    cp1252), which can't encode the ₹ / → in our output and crashes with
+    UnicodeEncodeError partway through a run. Force UTF-8 so redirected runs
+    don't crash; a real UTF-8 terminal is unaffected."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 class SlowCaller:
     """Wraps a caller with a pause per call so the board updates visibly."""
 
@@ -72,6 +83,8 @@ def build_caller(config):
 
 
 def main() -> None:
+    _ensure_utf8_stdio()
+
     brain = "engine"
     if "--brain" in sys.argv:
         brain = sys.argv[sys.argv.index("--brain") + 1]
@@ -155,7 +168,8 @@ def main() -> None:
 
     attach_board(state)
 
-    print(f"SlotSaver evening run — {state.clinic_name} — mock caller — brain: {brain}\n")
+    caller_label = "real calls (CALL-E)" if "--real" in sys.argv else "mock caller"
+    print(f"SlotSaver evening run — {state.clinic_name} — {caller_label} — brain: {brain}\n")
 
     if brain == "strands":
         if not config.agent_brain_enabled:

@@ -10,11 +10,17 @@ from pathlib import Path
 
 from .models import ClinicState, SlotStatus
 
-BOARD_PATH = Path(os.environ.get("BOARD_PATH", "board.json"))
+def _default_board_path() -> Path:
+    # Read lazily (not at import time) so a BOARD_PATH set only in .env — not
+    # a real shell env var — still takes effect: run_demo imports this module
+    # before config.load_config() has parsed .env.
+    return Path(os.environ.get("BOARD_PATH", "board.json"))
 
 
-def attach_board(state: ClinicState, path: Path = BOARD_PATH) -> None:
+def attach_board(state: ClinicState, path: Path | None = None) -> None:
     """Registers the snapshot writer and writes the opening board."""
+    if path is None:
+        path = _default_board_path()
     state.on_change = lambda s: _write(s, path)
     state.notify()
 

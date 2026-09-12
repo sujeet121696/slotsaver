@@ -11,9 +11,12 @@ import sys
 from .calle_caller import CalleCaller, allowed_phones
 from .config import load_config
 from .models import Appointment
+from .run_demo import _ensure_utf8_stdio
 
 
 def main() -> None:
+    _ensure_utf8_stdio()
+
     if len(sys.argv) != 2 or not sys.argv[1].startswith("+"):
         raise SystemExit("usage: python -m slotsaver.test_call +91XXXXXXXXXX (E.164)")
     phone = sys.argv[1]
