@@ -1,2 +1,249 @@
-# slotsaver
-slotsaver
+# SlotSaver
+
+**An AI front-desk agent that rescues cancelled appointment slots.**
+
+Every evening, "Asha" calls tomorrow's patients to confirm. When someone
+cancels, she immediately calls the waitlist and fills the empty slot — the
+call no human receptionist ever makes. Reminders are the commodity;
+**backfill is the product.**
+
+Clinic no-show rates run 15–30%. Every empty slot is paid-for chair time,
+staff time and rent producing zero revenue — and nobody calls a waitlist at
+9 PM to refill a slot that just opened for 11 AM tomorrow. The slot simply
+dies. SlotSaver makes that call.
+
+```
+EVENING RUN
+1. Read tomorrow's appointments + waitlist
+2. Confirm-call every patient
+   ├─ confirms         → CONFIRMED
+   ├─ no answer        → retry once, then flag NEEDS-ATTENTION
+   ├─ reschedules      → slot freed
+   └─ cancels          → slot freed
+3. Freed slot → call the waitlist in order until someone accepts
+4. Morning report: X confirmed · Y cancelled · Z backfilled · ₹ recovered
+```
+
+## Architecture
+
+```
+Demo appointment sheet (fictional data — never real patient data)
+        │
+Strands Agents SDK  — the agent brain deciding which call to place next
+        │  tool calls (all state changes live inside tools)
+        │        └──→ board.json → live browser board (demo_board.html)
+CALL-E  — real telephony: one API call per phone call, structured outcomes
+        │
+Morning report — slots recovered, rupees saved
+```
+
+- **Brain:** [AWS Strands Agents SDK](https://strandsagents.com) agent
+  (`slotsaver/agent.py`), LLM served by Groq. A deterministic fallback brain
+  (`slotsaver/engine.py`) runs the same loop with zero dependencies.
+- **Telephony:** [CALL-E](https://heycall-e.com) via the official `calle-ai`
+  SDK (`slotsaver/calle_caller.py`). Each call sends a natural-language task
+  plus a JSON `result_schema`, so CALL-E returns the outcome
+  (`confirmed` / `cancelled` / `reschedule` / `no_answer`) already structured —
+  no transcript parsing.
+- **Dry-run by default:** with no API keys set, everything runs on a scripted
+  `MockCaller` — no call is ever placed, no account needed.
+
+## What the calls sound like (persona: "Asha")
+
+**Confirm call**
+
+> "Hi, this is Asha calling from [clinic name]. Am I speaking with [patient]?
+> I'm just confirming your appointment tomorrow at [time] with [doctor].
+> Will you be able to make it?"
+
+- Yes → "Great, we'll see you at [time]. Have a good evening!"
+- Reschedule → "No problem — I'll free up that slot and the clinic will call
+  you to rebook."
+- Cancel → "Thanks for letting us know — I'll free up that slot."
+
+**Backfill call (to the waitlist)**
+
+> "Hi, this is Asha from [clinic name]. You asked us for an earlier
+> appointment — a slot just opened tomorrow at [time] with [doctor].
+> Would you like it?"
+
+- Yes → "Done, you're booked for [time] tomorrow. See you then!"
+- No → "No problem, we'll keep you on the list. Have a good evening!"
+
+Asha introduces herself as the clinic's assistant up front, keeps every call
+under ~45 seconds, never presses phone keys, and never waits on hold. The
+outcome of one call decides whether the next happens — a cancellation is what
+triggers the backfill call — so these are chained real calls, not one
+scripted call.
+
+## Setup — end to end
+
+### 0. Prerequisites
+
+- Python **3.11+**
+- macOS / Linux shell (Windows: use WSL)
+
+### 1. Accounts & keys (skip any you don't need)
+
+| Account | Where | What you get | Needed for |
+|---|---|---|---|
+| CALL-E | [heycall-e.com](https://heycall-e.com) → sign up → Dashboard → Account → **API Keys** | `CALLE_API_KEY` (`iams_…`) + free trial calls | Real phone calls |
+| Groq | [console.groq.com](https://console.groq.com) → **API Keys** | `GROQ_API_KEY` (`gsk_…`), free tier | The Strands agent brain |
+
+No keys at all? Everything still runs in dry-run mode (step 4).
+
+### 2. Install
+
+```bash
+git clone <this repo> && cd slotsaver
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+```
+
+### 3. Configure
+
+```bash
+cp .env.example .env
+```
+
+Then fill in `.env`:
+
+| Variable | Required? | Meaning |
+|---|---|---|
+| `CALLE_API_KEY` | For real calls | CALL-E dashboard API key. **Empty = mock caller, no calls placed.** |
+| `ALLOWED_DEMO_PHONES` | For real calls | Comma-separated E.164 numbers real calls may dial — **only phones you own**. Empty = every real call refused. |
+| `GROQ_API_KEY` | For agent brain | Groq key powering the Strands agent. Empty = deterministic engine only. |
+| `GROQ_MODEL` | No | Default `openai/gpt-oss-120b`. |
+| `GROQ_BASE_URL` | No | Any OpenAI-compatible endpoint (default: Groq). |
+| `CLINIC_NAME` / `AGENT_PERSONA` / `DOCTOR_NAME` | No | Demo clinic branding (defaults: Dr. Meera's Dental Clinic / Asha / Dr. Meera). |
+| `CALLE_REGION` / `CALLE_LOCALE` | No | Recipient region + call locale (defaults `IN` / `en-US`). |
+| `CALLE_TIMEOUT_SECONDS` | No | Max wait per call (default 300). |
+| `TEST_PATIENT_NAME` | No | The name `test_call` asks for (default: Rohit Sharma). |
+
+`.env` is gitignored; keys never leave your machine.
+
+### 4. Dry run — no calls, no keys, ₹0
+
+```bash
+# Deterministic engine brain
+.venv/bin/python -m slotsaver.run_demo
+
+# Strands agent brain (needs GROQ_API_KEY)
+.venv/bin/python -m slotsaver.run_demo --brain strands
+```
+
+Both print the evening's call log, tomorrow's board, and the morning report
+for a scripted scenario (a confirmation, a cancellation + backfill, a retry
+after no-answer, a reschedule).
+
+**Live demo board** — watch slots flip in the browser as calls land:
+
+```bash
+python3 -m http.server 8787          # terminal 1, from the repo root
+open http://localhost:8787/demo_board.html
+.venv/bin/python -m slotsaver.run_demo --slow 3   # terminal 2, paced run
+```
+
+Every run writes `board.json` after each state change; the board polls it
+once a second. `--slow 3` paces mock calls ~3s apart so the board tells the
+story at real-call speed.
+
+**Self-playing demo** — `demo_board.html?demo=1` needs no backend at all: it
+replays a real agent evening run on a loop (confirmations, a cancellation,
+waitlist backfills, ₹1,600 recovered). That's what the hosted demo serves:
+
+```bash
+mkdir -p site && cp demo_board.html site/   # plus a redirecting index.html
+npx wrangler pages deploy site --project-name slotsaver-board
+```
+
+### 5. One real test call
+
+```bash
+# 1. Put YOUR OWN number in .env:  ALLOWED_DEMO_PHONES=+91XXXXXXXXXX
+# 2. Place exactly one call (answer as the patient):
+.venv/bin/python -m slotsaver.test_call +91XXXXXXXXXX
+```
+
+Asha calls you, confirms a fictional appointment, and the script prints the
+structured outcome CALL-E returned.
+
+### 6. The full loop with REAL calls
+
+```bash
+# rehearse the exact take first — same cast and order, ₹0, no calls:
+.venv/bin/python -m slotsaver.run_demo --brain strands --take --slow 3
+
+# then the real thing:
+.venv/bin/python -m slotsaver.run_demo --brain strands --real +91XXXXXXXXXX
+```
+
+A trimmed 3-call cast where your allowlisted phone plays every patient —
+answer as the first patient (confirm), then Priya (cancel), then Arjun
+(accept the freed slot). It asks for a typed `yes` before dialing, spends
+~3 calls of credit, and the live board updates as each call lands.
+
+## Safety & side effects
+
+- **Real calls only ever reach allowlisted phones.** The demo data's numbers
+  are fictional; `CalleCaller` refuses anything not in `ALLOWED_DEMO_PHONES`
+  before touching the API.
+- All schedule/waitlist mutations happen inside tools — the LLM sequences
+  calls but cannot edit state directly.
+- Idempotency keys (unique per run) are sent on every call-create, so a
+  retry inside a run cannot double-dial the same person.
+- No real patient data anywhere; the appointment sheet is fictional and a
+  real deployment would read the clinic's own sheet.
+- Calls cost trial credits: the test runner places exactly one call per
+  invocation, and the demo scenario is rehearsable end-to-end on the mock.
+- **Cancellation:** every real run asks for a typed `yes` before dialing and
+  aborts placing zero calls otherwise. Ctrl-C between calls stops the run —
+  calls are placed strictly one at a time, so at most the call currently in
+  progress completes; nothing is queued or scheduled for later.
+
+## Tests
+
+```bash
+.venv/bin/python -m unittest discover tests
+```
+
+Pure stdlib, no keys, no calls — exercises every branch of the evening loop
+(confirm, cancel → backfill after a decline, no-answer → retry, reschedule)
+on the MockCaller, including the exact 3-call demo scenario.
+
+## Beyond clinics
+
+The same evening loop fits any appointment business with a waitlist: salons,
+physio courses ("session 6 of 10" nudges), diagnostic labs (fasting
+reminders), tuition and driving schools. The demo shows a dental clinic;
+swapping the sheet is all it takes.
+
+## Project structure
+
+```
+slotsaver/
+├── slotsaver/
+│   ├── models.py        # Appointment, WaitlistEntry, ClinicState
+│   ├── demo_data.py     # fictional clinic sheet
+│   ├── config.py        # .env loading; mock-by-default switches
+│   ├── caller.py        # Caller protocol + MockCaller (dry-run)
+│   ├── calle_caller.py  # real calls via CALL-E (calle-ai SDK)
+│   ├── engine.py        # deterministic fallback brain
+│   ├── agent.py         # Strands agent brain (tools + policy prompt)
+│   ├── board.py         # snapshots state to board.json for the live board
+│   ├── run_demo.py      # the evening run: --brain engine|strands [--slow N]
+│   └── test_call.py     # place exactly ONE real budgeted call
+├── tests/test_engine.py # stdlib unittest suite for the evening loop
+├── demo_board.html      # live browser board (serve via python -m http.server)
+├── requirements.txt
+└── .env.example
+```
+
+## Troubleshooting
+
+| Symptom | Likely cause / fix |
+|---|---|
+| `refusing to dial …: not in ALLOWED_DEMO_PHONES` | Add the number (E.164, `+91…`) to `ALLOWED_DEMO_PHONES` in `.env`. Working as designed. |
+| Phone never rings, script waits then reports `no_answer` | CALL-E dials India via a shared international pool — carrier spam screening (Jio/Truecaller/"silence unknown callers") may eat the call. Whitelist unknown callers for the test, or try a phone on another carrier. Check the call's status in the CALL-E dashboard. |
+| `--brain strands needs GROQ_API_KEY` | Set `GROQ_API_KEY` in `.env`, or use the default engine brain. |
+| `CALLE_API_KEY is not set` from `test_call` | Real calls need the CALL-E key in `.env`. |

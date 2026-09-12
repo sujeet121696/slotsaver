@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SlotSaver — Live Board</title>
+<style>
+  :root {
+    --bg: #0e1116; --card: #171c24; --line: #262d38; --text: #e6e9ee;
+    --dim: #8b94a3;
+    --scheduled: #8b94a3; --confirmed: #34c47c; --cancelled: #e5534b;
+    --backfilled: #b78bfa; --rescheduled: #58a6ff; --needs_attention: #e3a008;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text); min-height: 100vh; padding: 28px 36px;
+    font-family: "SF Pro Display", -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header { display: flex; align-items: baseline; justify-content: space-between;
+           flex-wrap: wrap; gap: 12px; margin-bottom: 24px; }
+  h1 { font-size: 26px; font-weight: 700; }
+  h1 small { color: var(--dim); font-weight: 400; font-size: 15px; margin-left: 10px; }
+  .recovered { text-align: right; }
+  .recovered .amount { font-size: 34px; font-weight: 800; color: var(--confirmed);
+                       font-variant-numeric: tabular-nums; }
+  .recovered .label { color: var(--dim); font-size: 12px; text-transform: uppercase;
+                      letter-spacing: 1px; }
+  main { display: grid; grid-template-columns: 1fr 320px; gap: 20px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .slots { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+           gap: 14px; align-content: start; }
+  .slot { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+          padding: 16px 18px; border-left: 5px solid var(--scheduled);
+          transition: border-color .4s, transform .4s; }
+  .slot .time { font-size: 20px; font-weight: 700; }
+  .slot .patient { font-size: 16px; margin-top: 6px; }
+  .slot .meta { color: var(--dim); font-size: 13px; margin-top: 4px; }
+  .pill { display: inline-block; margin-top: 10px; padding: 3px 10px; border-radius: 99px;
+          font-size: 11px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase;
+          background: var(--line); }
+  .slot.confirmed   { border-left-color: var(--confirmed); }
+  .slot.cancelled   { border-left-color: var(--cancelled); opacity: .75; }
+  .slot.backfilled  { border-left-color: var(--backfilled);
+                      box-shadow: 0 0 18px rgba(183,139,250,.25); }
+  .slot.rescheduled { border-left-color: var(--rescheduled); }
+  .slot.needs_attention { border-left-color: var(--needs_attention); }
+  .slot.confirmed .pill   { color: var(--confirmed); }
+  .slot.cancelled .pill   { color: var(--cancelled); }
+  .slot.backfilled .pill  { color: var(--backfilled); }
+  .slot.rescheduled .pill { color: var(--rescheduled); }
+  .slot.needs_attention .pill { color: var(--needs_attention); }
+  aside section { background: var(--card); border: 1px solid var(--line);
+                  border-radius: 12px; padding: 16px 18px; margin-bottom: 20px; }
+  aside h2 { font-size: 12px; color: var(--dim); text-transform: uppercase;
+             letter-spacing: 1px; margin-bottom: 12px; }
+  .waitlist li { list-style: none; padding: 6px 0; border-bottom: 1px solid var(--line);
+                 font-size: 14px; }
+  .waitlist li:last-child { border-bottom: none; }
+  .waitlist li::before { content: "☎ "; color: var(--dim); }
+  .log { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 12px;
+         line-height: 1.9; color: var(--dim); }
+  .log div:last-child { color: var(--text); }
+  .empty { color: var(--dim); font-size: 13px; }
+  footer { margin-top: 22px; color: var(--dim); font-size: 12px; }
+  #status { color: var(--needs_attention); }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="clinic">SlotSaver<small>tomorrow's schedule · live</small></h1>
+  <div class="recovered">
+    <div class="amount" id="recovered">₹0</div>
+    <div class="label">revenue recovered tonight</div>
+  </div>
+</header>
+<main>
+  <div class="slots" id="slots"></div>
+  <aside>
+    <section>
+      <h2>Waitlist — wants an earlier slot</h2>
+      <ul class="waitlist" id="waitlist"></ul>
+    </section>
+    <section>
+      <h2>Asha's call log</h2>
+      <div class="log" id="log"><div class="empty">waiting for the evening run…</div></div>
+    </section>
+  </aside>
+</main>
+<footer>SlotSaver · an AI front desk that rescues cancelled slots · <span id="status"></span></footer>
+<script>
+const esc = s => String(s).replace(/[&<>"]/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function render(data, tagline) {
+  document.getElementById("clinic").innerHTML =
+    esc(data.clinic) + "<small>" + esc(tagline) + "</small>";
+  document.getElementById("recovered").textContent =
+    "₹" + Number(data.recovered_inr || 0).toLocaleString("en-IN");
+  document.getElementById("slots").innerHTML = (data.appointments || []).map(a => `
+    <div class="slot ${esc(a.status)}">
+      <div class="time">${esc(a.time)}</div>
+      <div class="patient">${esc(a.patient)}</div>
+      <div class="meta">${esc(a.doctor)} · ₹${esc(a.fee_inr)}</div>
+      <span class="pill">${esc(a.status).replace("_", " ")}</span>
+    </div>`).join("");
+  document.getElementById("waitlist").innerHTML =
+    (data.waitlist || []).length
+      ? data.waitlist.map(w => `<li>${esc(w)}</li>`).join("")
+      : '<li class="empty">everyone placed 🎉</li>';
+  document.getElementById("log").innerHTML =
+    (data.log || []).length
+      ? data.log.map(l => `<div>${esc(l)}</div>`).join("")
+      : '<div class="empty">waiting for the evening run…</div>';
+}
+
+// ---- live mode: poll board.json written by the Python run -----------------
+async function refresh() {
+  let data;
+  try {
+    const res = await fetch("board.json?t=" + Date.now(), { cache: "no-store" });
+    if (!res.ok) throw new Error(res.status);
+    data = await res.json();
+    document.getElementById("status").textContent = "";
+  } catch {
+    document.getElementById("status").textContent =
+      "waiting for board.json — start a run with: python -m slotsaver.run_demo";
+    return;
+  }
+  render(data, "tomorrow's schedule · live");
+}
+
+// ---- demo mode (?demo=1): self-playing replay of a real agent run ---------
+function demoState() {
+  return {
+    clinic: "Dr. Meera's Dental Clinic",
+    recovered_inr: 0,
+    appointments: [
+      { time: "10:00 AM", patient: "Rohit Sharma", doctor: "Dr. Meera", fee_inr: 800,  status: "scheduled" },
+      { time: "11:00 AM", patient: "Priya Nair",   doctor: "Dr. Meera", fee_inr: 800,  status: "scheduled" },
+      { time: "12:00 PM", patient: "Imran Khan",   doctor: "Dr. Meera", fee_inr: 1200, status: "scheduled" },
+      { time: "4:00 PM",  patient: "Sunita Rao",   doctor: "Dr. Meera", fee_inr: 800,  status: "scheduled" },
+    ],
+    waitlist: ["Kavya Menon", "Arjun Das"],
+    log: [],
+  };
+}
+
+// Mirrors an actual Strands-agent evening run (it even backfills the
+// rescheduled slot — ₹1,600 recovered vs the script's ₹800).
+const DEMO_STEPS = [
+  s => s.log.push("7:00 PM — Asha starts tonight's confirmation round…"),
+  s => { s.log.push("Confirm call → Rohit Sharma confirmed 10:00 AM"); s.appointments[0].status = "confirmed"; },
+  s => { s.log.push("Confirm call → Priya Nair cancelled 11:00 AM"); s.appointments[1].status = "cancelled"; },
+  s => s.log.push("Backfill call → Kavya Menon declined the 11:00 AM slot"),
+  s => {
+    s.log.push("Backfill call → Arjun Das accepted the 11:00 AM slot");
+    s.log.push("Slot 11:00 AM refilled — ₹800 recovered");
+    Object.assign(s.appointments[1], { status: "backfilled", patient: "Arjun Das" });
+    s.waitlist = s.waitlist.filter(w => w !== "Arjun Das");
+    s.recovered_inr += 800;
+  },
+  s => s.log.push("Confirm call → Imran Khan did not answer"),
+  s => { s.log.push("Retry call → Imran Khan confirmed 12:00 PM"); s.appointments[2].status = "confirmed"; },
+  s => {
+    s.log.push("Confirm call → Sunita Rao asked to reschedule 4:00 PM");
+    s.log.push("Sunita Rao moved to a future slot; 4:00 PM freed");
+    s.appointments[3].status = "rescheduled";
+  },
+  s => {
+    s.log.push("Backfill call → Kavya Menon accepted the 4:00 PM slot");
+    s.log.push("Slot 4:00 PM refilled — ₹800 recovered");
+    Object.assign(s.appointments[3], { status: "backfilled", patient: "Kavya Menon" });
+    s.waitlist = s.waitlist.filter(w => w !== "Kavya Menon");
+    s.recovered_inr += 800;
+  },
+  s => s.log.push("Morning report: 2 confirmed · 1 cancelled · 2 backfilled · ₹1,600 recovered"),
+];
+
+function runDemo() {
+  document.getElementById("status").textContent =
+    "self-playing replay of the agent's evening run — see the demo video for the real phone calls";
+  let state = demoState(), i = 0;
+  render(state, "tomorrow's schedule · demo replay");
+  setInterval(() => {
+    if (i < DEMO_STEPS.length) {
+      DEMO_STEPS[i++](state);
+    } else if (i++ > DEMO_STEPS.length + 2) {   // hold the final board ~7s
+      state = demoState(); i = 0;
+    }
+    render(state, "tomorrow's schedule · demo replay");
+  }, 2200);
+}
+
+if (new URLSearchParams(location.search).has("demo")) runDemo();
+else { refresh(); setInterval(refresh, 1000); }
+</script>
+</body>
+</html>
