@@ -243,7 +243,7 @@ designed so the only way to know it exists is to already hold the secret:
 - `CALLE_API_KEY` lives only as a Worker secret; it's attached to the
   CALL-E request inside the Worker and never sent to or readable by the
   browser.
-- A KV-backed cooldown (20s between calls) and daily cap (5/day) per token
+- A KV-backed cooldown (60s between calls — Cloudflare KV's own TTL floor) and daily cap (5/day) per token
   limit how much a mistake — or a leaked token — could spend.
 
 **Setup** (after the deploy steps above):
