@@ -150,12 +150,8 @@ story at real-call speed.
 
 **Self-playing demo** — `demo_board.html?demo=1` needs no backend at all: it
 replays a real agent evening run on a loop (confirmations, a cancellation,
-waitlist backfills, ₹1,600 recovered). That's what the hosted demo serves:
-
-```bash
-mkdir -p site && cp demo_board.html site/   # plus a redirecting index.html
-npx wrangler pages deploy site --project-name slotsaver-board
-```
+waitlist backfills, ₹1,600 recovered). That's what the hosted demo serves —
+see [Deploying the hosted demo](#deploying-the-hosted-demo) below.
 
 ### 5. One real test call
 
@@ -182,6 +178,40 @@ A trimmed 3-call cast where your allowlisted phone plays every patient —
 answer as the first patient (confirm), then Priya (cancel), then Arjun
 (accept the freed slot). It asks for a typed `yes` before dialing, spends
 ~3 calls of credit, and the live board updates as each call lands.
+
+## Deploying the hosted demo
+
+The self-playing board (`demo_board.html?demo=1`) is a static page — no
+backend, no API keys needed at runtime — so it deploys as static assets on
+[Cloudflare Workers](https://developers.cloudflare.com/workers/static-assets/).
+`wrangler.jsonc` already points a Workers project (`slotsaver-board`) at a
+`site/` assets directory and an optional custom domain.
+
+```bash
+# 1. One-time: authenticate wrangler with your Cloudflare account
+npx wrangler login
+
+# 2. Build the static site/ folder (gitignored, regenerated each deploy)
+mkdir -p site
+cp demo_board.html site/demo_board.html
+cat > site/index.html <<'EOF'
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta http-equiv="refresh" content="0; url=demo_board.html?demo=1">
+<link rel="canonical" href="demo_board.html?demo=1"><title>SlotSaver</title>
+</head><body><p>Redirecting to the
+<a href="demo_board.html?demo=1">live demo board</a>…</p></body></html>
+EOF
+
+# 3. Deploy (uses wrangler.jsonc — project name, assets dir, custom domain)
+npx wrangler deploy
+```
+
+`wrangler deploy` prints both live URLs on success: the `*.workers.dev`
+subdomain and, if the custom domain's zone lives in your Cloudflare account,
+the domain configured under `routes` in `wrangler.jsonc`. Re-run steps 2–3
+any time `demo_board.html` changes — there's nothing to redeploy otherwise
+(no server, no database, no scheduled build).
 
 ## Safety & side effects
 
