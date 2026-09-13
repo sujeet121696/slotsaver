@@ -276,6 +276,24 @@ Anyone you hand the `?key=...` link to can trigger real calls on your
 credit (rate-limited, not unlimited) — share it the way you'd share a
 password, or not at all.
 
+### Real evening run — manual button, or fully automatic
+
+The same unlocked page also has a **"Real evening run"** section: a
+▶ **Start real evening run** button that places the whole confirm →
+cancel → backfill sequence for real (the trimmed cast the local `--real`
+flow uses), updating the board live as each call resolves. A 🧪 **Test the
+flow** button next to it runs the identical UI/flow simulated, for
+rehearsing safely first.
+
+The same sequence can also run **fully unattended, on a schedule** — a
+Cloudflare [Cron Trigger](https://developers.cloudflare.com/workers/configuration/cron-triggers/)
+(configured in `wrangler.jsonc`, ticking every evening) — but it's **off by
+default**, gated behind a small ON/OFF toggle right on the page
+("Automatic daily run (Cron): OFF/ON · turn on/turn off"). Flipping it
+writes a flag to KV and takes effect immediately, no redeploy needed.
+Turn it on when you actually want SlotSaver dialing your phone(s) on its
+own every evening; leave it off for manual-only control.
+
 ## Safety & side effects
 
 - **Real calls only ever reach allowlisted phones.** The demo data's numbers
