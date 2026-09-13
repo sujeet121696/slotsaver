@@ -19,7 +19,6 @@
   header { display: flex; align-items: baseline; justify-content: space-between;
            flex-wrap: wrap; gap: 12px; margin-bottom: 24px; }
   h1 { font-size: 26px; font-weight: 700; }
-  h1 small { color: var(--dim); font-weight: 400; font-size: 15px; margin-left: 10px; }
   .recovered { text-align: right; }
   .recovered .amount { font-size: 34px; font-weight: 800; color: var(--confirmed);
                        font-variant-numeric: tabular-nums; }
@@ -67,11 +66,11 @@
 </head>
 <body>
 <header>
-  <h1 id="clinic">
+  <h1>
     <svg width="26" height="26" viewBox="0 0 100 100" aria-hidden="true" style="vertical-align:-5px; margin-right:8px;">
       <rect x="10" y="10" width="46" height="46" rx="8" fill="#2f5fd6"/>
       <circle cx="60" cy="62" r="24" fill="#e8532b"/>
-    </svg>SlotSaver<small>tomorrow's schedule · live</small></h1>
+    </svg><span id="clinic">SlotSaver</span></h1>
   <div class="recovered">
     <div class="amount" id="recovered">₹0</div>
     <div class="label">revenue recovered tonight</div>
@@ -95,9 +94,8 @@
 const esc = s => String(s).replace(/[&<>"]/g,
   c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
-function render(data, tagline) {
-  document.getElementById("clinic").innerHTML =
-    esc(data.clinic) + "<small>" + esc(tagline) + "</small>";
+function render(data) {
+  document.getElementById("clinic").textContent = data.clinic;
   document.getElementById("recovered").textContent =
     "₹" + Number(data.recovered_inr || 0).toLocaleString("en-IN");
   document.getElementById("slots").innerHTML = (data.appointments || []).map(a => `
@@ -130,7 +128,7 @@ async function refresh() {
       "waiting for board.json — start a run with: python -m slotsaver.run_demo";
     return;
   }
-  render(data, "tomorrow's schedule · live");
+  render(data);
 }
 
 // ---- demo mode (?demo=1): self-playing replay of a real agent run ---------
@@ -184,14 +182,14 @@ function runDemo() {
   document.getElementById("status").textContent =
     "self-playing replay of the agent's evening run — see the demo video for the real phone calls";
   let state = demoState(), i = 0;
-  render(state, "tomorrow's schedule · demo replay");
+  render(state);
   setInterval(() => {
     if (i < DEMO_STEPS.length) {
       DEMO_STEPS[i++](state);
     } else if (i++ > DEMO_STEPS.length + 2) {   // hold the final board ~7s
       state = demoState(); i = 0;
     }
-    render(state, "tomorrow's schedule · demo replay");
+    render(state);
   }, 2200);
 }
 
