@@ -8,6 +8,8 @@
  *   POST /api/board         { token, snapshot }   -> { ok }   (see run_demo --push)
  *   GET  /api/board?token                          -> board.json-shaped snapshot
  *   GET  /api/evening/preview?token                -> board snapshot (cast, nothing called yet)
+ *   GET  /api/evening/autorun?token                 -> { enabled }   (is the Cron Trigger armed?)
+ *   POST /api/evening/autorun { token, enabled }    -> { enabled }   (arm/disarm it)
  *   POST /api/evening/start { token, dryRun? }    -> board snapshot  (manual trigger)
  *   POST /api/evening/step  { token, dryRun? }    -> board snapshot + done
  *
@@ -512,6 +514,28 @@ async function handleEveningPreview(request, env) {
   return json({ board: projectBoard(state) });
 }
 
+async function handleAutorunGet(request, env) {
+  if (!(await requireToken(request, env))) return json({ error: "unauthorized" }, 403);
+  if (!env.RATE_LIMIT) return json({ error: "server not configured" }, 503);
+  const enabled = (await env.RATE_LIMIT.get(AUTORUN_KV_KEY)) === "1";
+  return json({ enabled });
+}
+
+async function handleAutorunSet(request, env) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "invalid JSON body" }, 400);
+  }
+  const { token, enabled } = body || {};
+  if (!(await requireToken(request, env, token))) return json({ error: "unauthorized" }, 403);
+  if (!env.RATE_LIMIT) return json({ error: "server not configured" }, 503);
+  if (enabled) await env.RATE_LIMIT.put(AUTORUN_KV_KEY, "1");
+  else await env.RATE_LIMIT.delete(AUTORUN_KV_KEY);
+  return json({ enabled: !!enabled });
+}
+
 async function handleEveningStart(request, env) {
   let body;
   try {
@@ -567,8 +591,11 @@ async function handleEveningStep(request, env) {
   return json({ board: projectBoard(result), done: result.status !== "running" });
 }
 
+const AUTORUN_KV_KEY = "evening:autorun";
+
 async function runEveningScheduledTick(env) {
   if (!env.RATE_LIMIT || !env.CALLE_API_KEY) return;
+  if ((await env.RATE_LIMIT.get(AUTORUN_KV_KEY)) !== "1") return; // off by default
   const now = new Date();
   const afterStartTime = now.getUTCHours() > 13 || (now.getUTCHours() === 13 && now.getUTCMinutes() >= 30);
   const today = now.toISOString().slice(0, 10);
@@ -616,6 +643,12 @@ export default {
     }
     if (url.pathname === "/api/evening/preview" && request.method === "GET") {
       return handleEveningPreview(request, env);
+    }
+    if (url.pathname === "/api/evening/autorun" && request.method === "GET") {
+      return handleAutorunGet(request, env);
+    }
+    if (url.pathname === "/api/evening/autorun" && request.method === "POST") {
+      return handleAutorunSet(request, env);
     }
     if (url.pathname === "/api/evening/start" && request.method === "POST") {
       return handleEveningStart(request, env);

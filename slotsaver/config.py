@@ -6,6 +6,7 @@ with the MockCaller, so local testing never requires credentials.
 """
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,7 +21,15 @@ def _load_dotenv(path: Path) -> None:
             continue
         key, _, value = line.partition("=")
         key = key.strip()
-        value = value.strip().strip("'\"")
+        value = value.strip()
+        # Strip a trailing inline comment (" # ..."). Skipped for quoted
+        # values so a value that legitimately contains '#' stays intact.
+        # .env.example's commented-out lines look like
+        # "# KEY=value   # explanation" — uncommenting one without also
+        # dropping that trailing bit would otherwise corrupt the value.
+        if not (value.startswith('"') or value.startswith("'")):
+            value = re.split(r"\s+#", value, maxsplit=1)[0].strip()
+        value = value.strip("'\"")
         if key and key not in os.environ:
             os.environ[key] = value
 

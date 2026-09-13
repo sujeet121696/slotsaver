@@ -77,6 +77,9 @@
   .call-btn:hover:not(:disabled) { border-color: var(--rescheduled); }
   .call-btn:disabled { opacity: .5; cursor: not-allowed; }
   #callStatus { margin-top: 10px; font-size: 13px; color: var(--dim); }
+  .autorun-row { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line);
+                 font-size: 13px; color: var(--dim); }
+  .autorun-toggle { margin-left: 8px; padding: 3px 10px; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -104,6 +107,10 @@
       <button class="call-btn" id="eveningStartBtn">▶ Start real evening run</button>
       <button class="call-btn" id="eveningTestBtn">🧪 Test the flow (no real calls)</button>
       <div id="eveningStatus"></div>
+      <div class="autorun-row">
+        Automatic daily run (Cron): <strong id="autorunState">…</strong>
+        <button class="call-btn autorun-toggle" id="autorunToggleBtn">toggle</button>
+      </div>
     </section>
   </aside>
   <aside class="info">
@@ -384,9 +391,37 @@ function initEveningRun(token) {
   const statusEl = document.getElementById("eveningStatus");
   const startBtn = document.getElementById("eveningStartBtn");
   const testBtn = document.getElementById("eveningTestBtn");
+  const autorunState = document.getElementById("autorunState");
+  const autorunToggleBtn = document.getElementById("autorunToggleBtn");
   section.hidden = false;
 
   let running = false;
+
+  async function refreshAutorunLabel() {
+    try {
+      const res = await fetch("/api/evening/autorun?token=" + encodeURIComponent(token));
+      const data = await res.json();
+      autorunState.textContent = data.enabled ? "ON" : "OFF";
+      autorunToggleBtn.textContent = data.enabled ? "turn off" : "turn on";
+    } catch {
+      autorunState.textContent = "unknown";
+    }
+  }
+  refreshAutorunLabel();
+
+  autorunToggleBtn.addEventListener("click", async () => {
+    autorunToggleBtn.disabled = true;
+    const turningOn = autorunToggleBtn.textContent === "turn on";
+    try {
+      await fetch("/api/evening/autorun", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, enabled: turningOn }),
+      });
+    } catch { /* refreshAutorunLabel below will reflect whatever actually stuck */ }
+    await refreshAutorunLabel();
+    autorunToggleBtn.disabled = false;
+  });
 
   async function run(dryRun) {
     if (running) return;
