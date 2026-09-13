@@ -93,6 +93,7 @@
     <div class="amount" id="recovered">₹0</div>
     <div class="label">revenue recovered tonight</div>
   </div>
+  <button class="call-btn" id="refreshBtn" title="Refresh now instead of waiting for the next poll">⟳ Refresh</button>
 </header>
 <main>
   <div class="slots" id="slots"></div>
@@ -228,6 +229,10 @@ function wakeRefreshLoop() {
   idleTicks = 0;
   if (refreshTimer) { clearTimeout(refreshTimer); refreshLoop(); }
 }
+
+// Manual refresh: forces an immediate poll and snaps back to fast (1s)
+// cadence, instead of waiting out the up-to-5s idle backoff.
+document.getElementById("refreshBtn").addEventListener("click", wakeRefreshLoop);
 
 // ---- demo mode (?demo=1): self-playing replay of a real agent run ---------
 function demoState() {
