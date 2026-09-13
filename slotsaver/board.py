@@ -89,7 +89,7 @@ def _push(snapshot: dict) -> None:
     # LAST one of a run) leaves the public board frozen on a stale
     # snapshot — including possibly never showing the final morning
     # report — for everyone watching.
-    for attempt, backoff in enumerate((0, 0.6, 1.5), start=1):
+    for attempt, backoff in enumerate((0, 1, 5), start=1):
         if backoff:
             time.sleep(backoff)
         try:
