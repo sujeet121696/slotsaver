@@ -1,0 +1,24 @@
+# Local dev vars for `wrangler dev` (worker/index.js). Copy to `.dev.vars`
+# and fill in to test the /api/* routes locally — .dev.vars is gitignored,
+# never commit real values. For the deployed Worker these same three names
+# are set as Cloudflare secrets instead (never written to wrangler.jsonc):
+#
+#   printf '%s' '<value>' | npx wrangler secret put CALLE_API_KEY
+#   printf '%s' '<value>' | npx wrangler secret put ALLOWED_DEMO_PHONES
+#   printf '%s' '<value>' | npx wrangler secret put CALL_TRIGGER_TOKEN
+
+# CALL-E API key from the heycall-e.com dashboard.
+CALLE_API_KEY=
+
+# Comma-separated E.164 numbers the /api/call route is allowed to dial
+# (phones we own). This list never reaches the browser — the page only
+# ever sees masked labels + an index; see worker/index.js.
+ALLOWED_DEMO_PHONES=
+
+# Random secret that unlocks the "Trigger a real call" button. Generate one
+# with: node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"
+# Visit the page once as ?key=<this value> to store it in that browser's
+# localStorage (the URL is immediately rewritten to drop the query param).
+# Treat the resulting bookmarked link like a password — anyone who has it
+# can trigger real calls (rate-limited, but still spends CALL-E credit).
+CALL_TRIGGER_TOKEN=

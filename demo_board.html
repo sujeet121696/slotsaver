@@ -62,6 +62,12 @@
   .empty { color: var(--dim); font-size: 13px; }
   footer { margin-top: 22px; color: var(--dim); font-size: 12px; }
   #status { color: var(--needs_attention); }
+  .call-btn { display: inline-block; margin: 4px 6px 4px 0; padding: 8px 14px;
+              border-radius: 8px; border: 1px solid var(--line); background: var(--line);
+              color: var(--text); font-size: 13px; cursor: pointer; }
+  .call-btn:hover:not(:disabled) { border-color: var(--rescheduled); }
+  .call-btn:disabled { opacity: .5; cursor: not-allowed; }
+  #callStatus { margin-top: 10px; font-size: 13px; color: var(--dim); }
 </style>
 </head>
 <body>
@@ -86,6 +92,11 @@
     <section>
       <h2>Asha's call log</h2>
       <div class="log" id="log"><div class="empty">waiting for the evening run…</div></div>
+    </section>
+    <section id="caller" hidden>
+      <h2>Trigger a real call</h2>
+      <div id="callButtons"></div>
+      <div id="callStatus"></div>
     </section>
   </aside>
 </main>
@@ -195,6 +206,84 @@ function runDemo() {
 
 if (new URLSearchParams(location.search).has("demo")) runDemo();
 else { refresh(); setInterval(refresh, 1000); }
+
+// ---- private call trigger ---------------------------------------------
+// Token-gated: real phone numbers never reach the browser, only masked
+// labels + an opaque id. Silently does nothing without a valid token, so
+// the page looks identical to any other visitor.
+(async function initCaller() {
+  const params = new URLSearchParams(location.search);
+  let token = params.get("key");
+  if (token) {
+    try { localStorage.setItem("slotsaver_token", token); } catch {}
+    params.delete("key");
+    const clean = location.pathname + (params.toString() ? "?" + params.toString() : "") + location.hash;
+    history.replaceState(null, "", clean);
+  } else {
+    try { token = localStorage.getItem("slotsaver_token"); } catch { token = null; }
+  }
+  if (!token) return;
+
+  let numbers;
+  try {
+    const res = await fetch("/api/numbers?token=" + encodeURIComponent(token));
+    if (!res.ok) return; // bad/expired token — stay silent
+    ({ numbers } = await res.json());
+  } catch { return; }
+  if (!numbers || !numbers.length) return;
+
+  const section = document.getElementById("caller");
+  const btnWrap = document.getElementById("callButtons");
+  const statusEl = document.getElementById("callStatus");
+  section.hidden = false;
+  btnWrap.innerHTML = numbers.map(n =>
+    `<button class="call-btn" data-id="${n.id}">📞 Call ${esc(n.label)}</button>`
+  ).join("");
+  btnWrap.querySelectorAll(".call-btn").forEach(btn =>
+    btn.addEventListener("click", () => placeCall(btn, token, statusEl)));
+
+  async function placeCall(btn, token, statusEl) {
+    btn.disabled = true;
+    statusEl.textContent = "Placing call…";
+    try {
+      const res = await fetch("/api/call", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: Number(btn.dataset.id), token }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        statusEl.textContent = "Error: " + (data.error || res.status);
+        btn.disabled = false;
+        return;
+      }
+      statusEl.textContent = "Calling — answer your phone…";
+      await pollCall(data.call_id, token, statusEl);
+    } catch {
+      statusEl.textContent = "Network error placing the call.";
+    }
+    setTimeout(() => { btn.disabled = false; }, 20000); // matches server cooldown
+  }
+
+  async function pollCall(callId, token, statusEl) {
+    for (let i = 0; i < 150; i++) { // up to ~5 min at 2s intervals
+      await new Promise(r => setTimeout(r, 2000));
+      let data;
+      try {
+        const res = await fetch(`/api/call?id=${encodeURIComponent(callId)}&token=${encodeURIComponent(token)}`);
+        data = await res.json();
+      } catch { continue; }
+      if (data.terminal) {
+        statusEl.textContent = data.outcome
+          ? `Result: ${data.outcome}${data.notes ? " — " + data.notes : ""}`
+          : `Call ended (${data.status})`;
+        return;
+      }
+      statusEl.textContent = `Status: ${data.status || "in progress"}…`;
+    }
+    statusEl.textContent = "Timed out waiting for the call result.";
+  }
+})();
 </script>
 </body>
 </html>

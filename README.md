@@ -213,6 +213,69 @@ the domain configured under `routes` in `wrangler.jsonc`. Re-run steps 2–3
 any time `demo_board.html` changes — there's nothing to redeploy otherwise
 (no server, no database, no scheduled build).
 
+### Optional: a private "trigger a real call" button on the hosted page
+
+`worker/index.js` turns the deploy from pure static hosting into a small
+Worker (still serving `site/` via the `ASSETS` binding for everything else)
+that adds two API routes so the hosted board can place one real CALL-E test
+call without anyone running Python locally:
+
+```
+POST /api/call    { id, token } -> { call_id }          places the call
+GET  /api/call     ?id&token    -> { status, outcome }  polled by the page
+GET  /api/numbers  ?token       -> [{ id, label }]       masked number list
+```
+
+**Security model** — this endpoint can spend real call credit, so it's
+designed so the only way to know it exists is to already hold the secret:
+
+- The real phone numbers in `ALLOWED_DEMO_PHONES` **never reach the
+  browser**. `/api/numbers` returns a masked label (`+9182••••404`) and a
+  small integer `id`; the Worker maps that id back to the real number
+  itself, server-side. A public page's HTML/JS source is always viewable by
+  anyone regardless of what's hidden in the UI, so nothing sensitive is
+  ever embedded in it — only referenced by an opaque id.
+- Every route requires `token` to equal the `CALL_TRIGGER_TOKEN` secret,
+  compared in constant time (hash-then-compare, so a wrong guess can't be
+  timed to find out how much of it matched). No token = a flat `403` from
+  every route, and the page renders identically to any other visitor —
+  no calling UI, no hint the feature exists.
+- `CALLE_API_KEY` lives only as a Worker secret; it's attached to the
+  CALL-E request inside the Worker and never sent to or readable by the
+  browser.
+- A KV-backed cooldown (20s between calls) and daily cap (5/day) per token
+  limit how much a mistake — or a leaked token — could spend.
+
+**Setup** (after the deploy steps above):
+
+```bash
+# One-time: a KV namespace for the rate limiter
+npx wrangler kv namespace create RATE_LIMIT
+# → paste the printed { "binding": "RATE_LIMIT", "id": "..." } into
+#   wrangler.jsonc under "kv_namespaces" (already done in this repo)
+
+# Generate a private access token — treat it like a password
+node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"
+
+# Push secrets (never written to wrangler.jsonc or git)
+printf '%s' '<your CALL-E API key>'        | npx wrangler secret put CALLE_API_KEY
+printf '%s' '+91XXXXXXXXXX,+91YYYYYYYYYY'  | npx wrangler secret put ALLOWED_DEMO_PHONES
+printf '%s' '<the generated token>'        | npx wrangler secret put CALL_TRIGGER_TOKEN
+
+npx wrangler deploy
+```
+
+Then visit the page **once** with `?key=<the generated token>` appended,
+e.g. `https://slotsaver.kharidwise.com/demo_board.html?key=...` — the page
+saves it to that browser's `localStorage` and immediately rewrites the URL
+to drop the query param, so it isn't left sitting in the address bar,
+browser history, or link previews. A "Trigger a real call" section then
+appears with a button per allowlisted number. Bookmark the **plain** URL
+(without `?key=`) afterwards; that browser already remembers the token.
+Anyone you hand the `?key=...` link to can trigger real calls on your
+credit (rate-limited, not unlimited) — share it the way you'd share a
+password, or not at all.
+
 ## Safety & side effects
 
 - **Real calls only ever reach allowlisted phones.** The demo data's numbers
@@ -265,8 +328,11 @@ slotsaver/
 │   └── test_call.py     # place exactly ONE real budgeted call
 ├── tests/test_engine.py # stdlib unittest suite for the evening loop
 ├── demo_board.html      # live browser board (serve via python -m http.server)
+├── worker/index.js      # Cloudflare Worker: serves site/ + the token-gated /api/call routes
+├── wrangler.jsonc       # Worker config: project name, assets dir, KV binding, custom domain
 ├── requirements.txt
-└── .env.example
+├── .env.example
+└── .dev.vars.example    # names of the Worker secrets (see "trigger a real call" above)
 ```
 
 ## Troubleshooting
