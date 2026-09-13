@@ -134,7 +134,7 @@ async function handlePostCall(request, env) {
   } catch {
     return json({ error: "invalid JSON body" }, 400);
   }
-  const { id, token } = body || {};
+  const { id, token, dryRun } = body || {};
   if (!(await requireToken(request, env, token))) return json({ error: "unauthorized" }, 403);
 
   const phones = allowedPhones(env);
@@ -142,6 +142,15 @@ async function handlePostCall(request, env) {
   if (!Number.isInteger(idx) || idx < 0 || idx >= phones.length) {
     return json({ error: "unknown number id" }, 400);
   }
+
+  // Dry run exercises the exact same auth + id validation above, then stops
+  // — never calls CALL-E, never touches the rate limiter, no credit spent.
+  // The fake call_id encodes its own start time so /api/call?id=... can
+  // simulate progress statelessly (Workers keep no memory between requests).
+  if (dryRun) {
+    return json({ call_id: `dryrun-${Date.now()}-${crypto.randomUUID().slice(0, 8)}` });
+  }
+
   const phone = phones[idx];
 
   const rl = await checkAndBumpRateLimit(env, token);
@@ -175,6 +184,18 @@ async function handleGetCall(request, env) {
   if (!(await requireToken(request, env))) return json({ error: "unauthorized" }, 403);
   const callId = url.searchParams.get("id");
   if (!callId) return json({ error: "missing id" }, 400);
+
+  if (callId.startsWith("dryrun-")) {
+    const startMs = Number(callId.split("-")[1]) || 0;
+    const elapsed = Date.now() - startMs;
+    if (elapsed < 4000) return json({ status: "in_progress", terminal: false });
+    return json({
+      status: "completed",
+      terminal: true,
+      outcome: "confirmed",
+      notes: "simulated — no real call was placed, no credit spent",
+    });
+  }
 
   const res = await fetch(`${CALLE_BASE}/v1/calls/${encodeURIComponent(callId)}`, {
     headers: { Authorization: `Bearer ${env.CALLE_API_KEY}` },

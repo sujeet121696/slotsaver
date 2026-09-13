@@ -238,18 +238,21 @@ else { refresh(); setInterval(refresh, 1000); }
   section.hidden = false;
   btnWrap.innerHTML = numbers.map(n =>
     `<button class="call-btn" data-id="${n.id}">📞 Call ${esc(n.label)}</button>`
-  ).join("");
+  ).join("") +
+    `<button class="call-btn" id="testFlowBtn" data-id="${numbers[0].id}" data-dry-run="1">` +
+    `🧪 Test the flow (no real call, no credit spent)</button>`;
   btnWrap.querySelectorAll(".call-btn").forEach(btn =>
     btn.addEventListener("click", () => placeCall(btn, token, statusEl)));
 
   async function placeCall(btn, token, statusEl) {
+    const dryRun = btn.dataset.dryRun === "1";
     btn.disabled = true;
-    statusEl.textContent = "Placing call…";
+    statusEl.textContent = dryRun ? "Placing test call (simulated)…" : "Placing call…";
     try {
       const res = await fetch("/api/call", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: Number(btn.dataset.id), token }),
+        body: JSON.stringify({ id: Number(btn.dataset.id), token, dryRun }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -257,12 +260,14 @@ else { refresh(); setInterval(refresh, 1000); }
         btn.disabled = false;
         return;
       }
-      statusEl.textContent = "Calling — answer your phone…";
+      statusEl.textContent = dryRun ? "Simulating…" : "Calling — answer your phone…";
       await pollCall(data.call_id, token, statusEl);
     } catch {
       statusEl.textContent = "Network error placing the call.";
     }
-    setTimeout(() => { btn.disabled = false; }, 20000); // matches server cooldown
+    // Real calls: matches the server's 20s cooldown. Dry runs aren't
+    // rate-limited server-side, so re-enable almost immediately.
+    setTimeout(() => { btn.disabled = false; }, dryRun ? 500 : 20000);
   }
 
   async function pollCall(callId, token, statusEl) {
