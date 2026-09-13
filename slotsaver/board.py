@@ -12,6 +12,7 @@ either unset, nothing changes and no network call is ever made.
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -69,9 +70,31 @@ def _push(snapshot: dict) -> None:
         return
     body = json.dumps({"token": token, "snapshot": snapshot}).encode()
     request = urllib.request.Request(
-        url, data=body, headers={"Content-Type": "application/json"}, method="POST"
+        url,
+        data=body,
+        # Cloudflare's bot protection silently drops requests carrying
+        # Python's default "Python-urllib/x.y" User-Agent (connection reset,
+        # no HTTP response at all) — a custom one passes through cleanly.
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "SlotSaver-BoardPush/1.0",
+        },
+        method="POST",
     )
-    try:
-        urllib.request.urlopen(request, timeout=5).close()
-    except (urllib.error.URLError, TimeoutError, OSError):
-        pass  # the local board.json write already succeeded; the run continues
+    # Retry with backoff: pushes fire once per state change (several per
+    # call outcome), and a burst of them in quick succession appears to hit
+    # a short-lived edge rate limit — an immediate retry lands inside the
+    # same window and fails too. A brief pause before retrying gives that
+    # window time to clear. Without this, a dropped push (especially the
+    # LAST one of a run) leaves the public board frozen on a stale
+    # snapshot — including possibly never showing the final morning
+    # report — for everyone watching.
+    for attempt, backoff in enumerate((0, 0.6, 1.5), start=1):
+        if backoff:
+            time.sleep(backoff)
+        try:
+            urllib.request.urlopen(request, timeout=5).close()
+            return
+        except (urllib.error.URLError, TimeoutError, OSError):
+            if attempt == 3:
+                pass  # local board.json already wrote; the run continues
