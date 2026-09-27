@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo.svg" alt="SlotSaver" width="280"></p>
+
 # SlotSaver
 
 **An AI front-desk agent that rescues cancelled appointment slots.**
@@ -194,9 +196,11 @@ npx wrangler login
 # 2. Build the static site/ folder (gitignored, regenerated each deploy)
 mkdir -p site
 cp demo_board.html site/demo_board.html
+cp assets/favicon.svg site/favicon.svg
 cat > site/index.html <<'EOF'
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
 <meta http-equiv="refresh" content="0; url=demo_board.html?demo=1">
 <link rel="canonical" href="demo_board.html?demo=1"><title>SlotSaver</title>
 </head><body><p>Redirecting to the
@@ -346,6 +350,7 @@ slotsaver/
 │   └── test_call.py     # place exactly ONE real budgeted call
 ├── tests/test_engine.py # stdlib unittest suite for the evening loop
 ├── demo_board.html      # live browser board (serve via python -m http.server)
+├── assets/              # logo.svg (README/branding) + favicon.svg (hosted site)
 ├── worker/index.js      # Cloudflare Worker: serves site/ + the token-gated /api/call routes
 ├── wrangler.jsonc       # Worker config: project name, assets dir, KV binding, custom domain
 ├── requirements.txt

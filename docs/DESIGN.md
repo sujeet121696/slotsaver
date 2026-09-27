@@ -9,7 +9,20 @@
 - **₹ recovered is the headline:** always the most prominent number.
 - **One static file:** no framework and no build step, so it deploys anywhere.
 
-## 2. Colour tokens
+## 2. Logo
+
+- **Mark:** a calendar card (purple header = `backfilled`) with one slot filled green and a check (the refilled slot).
+- **Wordmark:** "Slot" in `--dim` grey + "Saver" in `--confirmed` green, so it reads on light and dark backgrounds.
+
+| File | Use |
+|---|---|
+| `assets/logo.svg` | Mark + wordmark: README, slides, Devpost |
+| `assets/favicon.svg` | Mark only: hosted site favicon |
+| `demo_board.html` | Same mark inlined (header + data-URI favicon), so the board stays one file |
+
+If the mark changes, update all three.
+
+## 3. Colour tokens
 
 | Token | Value | Use |
 |---|---|---|
@@ -28,12 +41,12 @@
 | rescheduled | `#58a6ff` blue |
 | needs_attention | `#e3a008` amber |
 
-## 3. Layout
+## 4. Layout
 
 - System font stack. The ops log is monospace and shows the last 12 lines.
 - Breakpoints at 1000px and 480px. Below 480px the slot grid becomes one column.
 
-## 4. Board modes
+## 5. Board modes
 
 | Mode | Trigger | Data source |
 |---|---|---|
@@ -42,7 +55,7 @@
 | Replay | `?demo=1` | Built-in recorded run, no backend |
 | Private controls | `?key=<token>` once | Token saved to localStorage and removed from the URL. Hidden otherwise |
 
-## 5. Call persona: Asha
+## 6. Call persona: Asha
 
 - Introduces herself as the clinic's assistant. Warm and brief, under about 45 seconds.
 - **Confirm:** "Hi, this is Asha calling from [clinic]… confirming your appointment tomorrow at [time] with [doctor]. Will you be able to make it?"
