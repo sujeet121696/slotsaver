@@ -24,10 +24,11 @@
    |---|---|
    | Confirms | `confirmed` |
    | No answer | Retry once, then `needs_attention` |
-   | Reschedules | `rescheduled`, slot freed |
+   | Wrong person, or no usable result | `needs_attention` for a human. No retry, slot not freed |
+   | Reschedules | `rescheduled`, slot freed (the patient keeps a future booking, so no backfill) |
    | Cancels | `cancelled`, slot freed |
 
-3. For each freed slot, call the waitlist in order until someone accepts (`backfilled`).
+3. For each cancelled slot, call the waitlist in order until someone accepts (`backfilled`). An unclear offer call pauses that slot's backfill for a human.
 4. Morning report: confirmed · cancelled · backfilled · ₹ recovered.
 
 **Backfill is the product. Reminders are just the way in.**
@@ -36,7 +37,8 @@
 
 - **Zero-key mode:** runs end to end with a mock caller and the deterministic brain.
 - **Safe real calls:** allowlisted numbers only, a typed `yes` before each run, one call at a time.
-- **Tool-gated state:** the LLM chooses the order of calls, but only tools change state.
+- **Tool-gated state:** the LLM chooses the order of calls, but only tools change state, and the tools enforce the rules (waitlist order, cancelled slots only, at most 2 calls per person).
+- **Outcomes are proposals:** on a real clinic schedule, a change needs CALL-E's call record plus a human's approval. The demo applies them only to fictional data.
 - **Live board:** slots change status as calls land. The `?demo=1` replay needs no backend.
 - **Hosted controls:** token-gated real call and real evening run. Cron autorun is **off by default**.
 

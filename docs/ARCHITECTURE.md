@@ -19,7 +19,9 @@
 demo_data.py ──► ClinicState
                      │
       brain: agent.py (Strands)  or  engine.py (deterministic)
-                     │  state changes only through tools
+                     │  both drive tools.py (EveningTools): the only state changes
+                     ▼
+               tools.py — guards: cancelled slots only, waitlist order, ≤2 calls/person
                      ▼
       Caller: MockCaller (default)  or  CalleCaller (real, allowlisted)
                      │
@@ -36,9 +38,10 @@ demo_data.py ──► ClinicState
 | `demo_data.py` | Fictional clinic sheet (full scenario + 3-call real cast) |
 | `config.py` | `.env` loading, mock-by-default switches |
 | `caller.py` | `Caller` protocol + scripted `MockCaller` |
-| `calle_caller.py` | Real calls: allowlist check, create and poll, per-run idempotency keys |
-| `engine.py` | Deterministic evening loop |
-| `agent.py` | Strands agent: `get_worklist`, `confirm_call`, `offer_slot`, `get_morning_report` |
+| `calle_caller.py` | Real calls: allowlist check, create and poll, per-run idempotency keys. A failed call or invalid result becomes `wrong_person_or_unclear` |
+| `tools.py` | `EveningTools`: the only code that changes state during a run, with the rule guards (`GuardError`) |
+| `engine.py` | Deterministic evening loop over `EveningTools` |
+| `agent.py` | Strands agent wrapping `EveningTools`: `get_worklist`, `confirm_call`, `offer_slot`, `get_morning_report` |
 | `board.py` | Atomic `board.json` writes, opt-in push (`BOARD_PUSH_URL` + `BOARD_PUSH_TOKEN`) |
 | `run_demo.py` | CLI entry: `--brain`, `--slow N`, `--take`, `--real <phone>` |
 | `test_call.py` | Places exactly one real call |
@@ -61,6 +64,9 @@ demo_data.py ──► ClinicState
 | `POST /api/evening/start`, `/step` | Run the evening sequence (supports `dryRun`) |
 
 Every route needs the `CALL_TRIGGER_TOKEN`. Without it, the route returns a flat `403`.
+
+- Idempotency keys carry a per-run `runId`, so a second run on the same day dials instead of getting cached calls.
+- A real evening run is charged against the same cooldown and daily cap as single calls (one unit per expected call), and can't start while another real run is running.
 
 > ⚠️ The evening loop exists twice: in Python (`engine.py`/`agent.py`) and in JavaScript (the Worker). Keep them consistent.
 

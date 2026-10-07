@@ -2,11 +2,22 @@
 
 > Progress tracker. Move items between sections as work happens.
 
-_Last updated: 2026-09-27_
+_Last updated: 2026-10-06_
 
-## In progress: `NextVrsion`
+## In progress: `NextVersion`
 
-- [ ] _Define the next version's scope here_
+Cleanup pass, all local. Not deployed: the live site stays on the judged
+build (tag `hackathon-submission-2026-09-14`) until judging is over.
+
+- [x] Remove a real phone number from a Worker comment (it stays in git history; the tag can't be rewritten)
+- [x] Worker: per-run idempotency keys (a second same-day run used to get cached calls)
+- [x] `wrong_person_or_unclear` outcome in Python and the Worker; failed or invalid results are flagged, never read as `no_answer`
+- [x] One reschedule rule everywhere: no backfill (the agent prompt used to backfill)
+- [x] `tools.py`: rule guards shared by both brains
+- [x] Worker: evening runs count against the rate limit; no second real run while one is running
+- [x] Tests for all of the above (Python: `tests/test_tools.py`)
+- [ ] Deploy with `npx wrangler deploy` once judging is over
+- [ ] Rehearse once with `--take`, then one real `--real` check
 
 ## Backlog
 

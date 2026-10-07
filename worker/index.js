@@ -5,7 +5,7 @@
  *   POST /api/call          { id, token }        -> { call_id }
  *   GET  /api/call?id&token                      -> { status, outcome }
  *   GET  /api/numbers?token                       -> [{ id, label }]
- *   POST /api/board         { token, snapshot }   -> { ok }   (see run_demo --push)
+ *   POST /api/board         { token, snapshot }   -> { ok }   (board.py push, BOARD_PUSH_URL)
  *   GET  /api/board?token                          -> board.json-shaped snapshot
  *   GET  /api/evening/preview?token                -> board snapshot (cast, nothing called yet)
  *   GET  /api/evening/autorun?token                 -> { enabled }   (is the Cron Trigger armed?)
@@ -39,7 +39,10 @@ const CONFIRM_SCHEMA = {
   type: "object",
   required: ["outcome"],
   properties: {
-    outcome: { type: "string", enum: ["confirmed", "cancelled", "reschedule", "no_answer"] },
+    outcome: {
+      type: "string",
+      enum: ["confirmed", "cancelled", "reschedule", "no_answer", "wrong_person_or_unclear"],
+    },
     notes: { type: "string" },
   },
   additionalProperties: false,
@@ -49,7 +52,7 @@ const OFFER_SCHEMA = {
   type: "object",
   required: ["outcome"],
   properties: {
-    outcome: { type: "string", enum: ["accepted", "declined", "no_answer"] },
+    outcome: { type: "string", enum: ["accepted", "declined", "no_answer", "wrong_person_or_unclear"] },
     notes: { type: "string" },
   },
   additionalProperties: false,
@@ -88,7 +91,7 @@ function allowedPhones(env) {
 }
 
 function maskPhone(phone) {
-  // +918248164404 -> +9182••••404
+  // +15551234567 -> +1555••••567
   if (phone.length < 8) return "•".repeat(phone.length);
   return phone.slice(0, 5) + "••••" + phone.slice(-3);
 }
@@ -98,7 +101,8 @@ async function tokenKeyPrefix(token) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 16);
 }
 
-async function checkAndBumpRateLimit(env, token) {
+/** `cost` = calls this request may place; an evening run books its whole cast up front. */
+async function checkAndBumpRateLimit(env, token, cost = 1) {
   if (!env.RATE_LIMIT) return { ok: true }; // fail open only if KV not bound (local/dev)
   const prefix = await tokenKeyPrefix(token);
   const cooldownKey = `cooldown:${prefix}`;
@@ -108,40 +112,51 @@ async function checkAndBumpRateLimit(env, token) {
   const day = new Date().toISOString().slice(0, 10);
   const dailyKey = `daily:${prefix}:${day}`;
   const count = Number((await env.RATE_LIMIT.get(dailyKey)) || "0");
-  if (count >= DAILY_CAP) {
+  if (count + cost > DAILY_CAP) {
     return { ok: false, error: `Daily limit of ${DAILY_CAP} calls reached.` };
   }
   await env.RATE_LIMIT.put(cooldownKey, "1", { expirationTtl: COOLDOWN_SECONDS });
-  await env.RATE_LIMIT.put(dailyKey, String(count + 1), { expirationTtl: 86400 });
+  await env.RATE_LIMIT.put(dailyKey, String(count + cost), { expirationTtl: 86400 });
   return { ok: true };
 }
 
 function buildConfirmTask(patient, time) {
   return (
     `You are ${AGENT_PERSONA}, the friendly phone assistant of ${CLINIC_NAME}. ` +
-    `Call ${patient} and confirm their appointment TOMORROW at ${time} with ` +
-    `${DOCTOR_NAME}. Introduce yourself as the clinic's assistant up front. ` +
+    `Call ${patient} and first confirm you are speaking with ${patient} — if ` +
+    `the person on the line says they are someone else, or you cannot tell ` +
+    `who you are speaking with, do not discuss the appointment; end the call ` +
+    `politely (wrong_person_or_unclear). Otherwise, confirm their ` +
+    `appointment TOMORROW at ${time} with ${DOCTOR_NAME}. Introduce yourself as the clinic's assistant up front. ` +
     `You are talking to a person — never press any phone keys and never ` +
     `wait on hold. The moment you have the answer, thank them, say goodbye, ` +
     `and end the call; keep it under 45 seconds. Outcomes: they will come ` +
     `(confirmed); they cancel (cancelled) — thank them and say the slot ` +
     `will be freed; they want a different time (reschedule); nobody ` +
-    `answered or it wasn't them (no_answer).`
+    `answered (no_answer); you reached someone but could not confirm it was ` +
+    `${patient}, or the call was too ambiguous to classify ` +
+    `(wrong_person_or_unclear).`
   );
 }
 
 function buildOfferTask(name, time) {
   return (
     `You are ${AGENT_PERSONA}, the friendly phone assistant of ${CLINIC_NAME}. ` +
-    `Call ${name}, who asked us for an earlier appointment. A slot just ` +
-    `opened TOMORROW at ${time} with ${DOCTOR_NAME}. Offer it to them. ` +
+    `Call ${name}, who asked us for an earlier appointment, and first ` +
+    `confirm you are speaking with ${name} — if the person on the line says ` +
+    `they are someone else, or you cannot tell who you are speaking with, do ` +
+    `not offer the slot; end the call politely (wrong_person_or_unclear). ` +
+    `Otherwise, tell them a slot just opened TOMORROW at ${time} with ` +
+    `${DOCTOR_NAME} and offer it to them. ` +
     `Introduce yourself as the clinic's assistant up front. You are ` +
     `talking to a person — never press any phone keys and never wait on ` +
     `hold. The moment you have the answer, thank them, say goodbye, and ` +
     `end the call; keep it under 45 seconds. Outcomes: they take the slot ` +
     `(accepted) — tell them they are booked and the clinic will see them ` +
     `tomorrow; they don't want it (declined) — they stay on the list; ` +
-    `nobody answered (no_answer).`
+    `nobody answered (no_answer); you reached someone but could not confirm ` +
+    `it was ${name}, or the call was too ambiguous to classify ` +
+    `(wrong_person_or_unclear).`
   );
 }
 
@@ -294,6 +309,10 @@ function initEveningState(phones, dryRun) {
   const cast = buildCast(phones);
   return {
     date: new Date().toISOString().slice(0, 10),
+    // CALL-E dedupes idempotency keys forever, so keys carry a per-run id:
+    // a second run on the same day must dial, not get the first run's
+    // cached calls back.
+    runId: crypto.randomUUID().slice(0, 8),
     status: "running",
     clinicName: CLINIC_NAME,
     recoveredInr: 0,
@@ -356,6 +375,23 @@ async function calleGetCall(env, callId) {
   return res.json();
 }
 
+/** Run id for idempotency keys; mints one for a state saved before runId existed. */
+function runKey(state) {
+  if (!state.runId) state.runId = crypto.randomUUID().slice(0, 8);
+  return state.runId;
+}
+
+/** A result we can act on, or "wrong_person_or_unclear" when the call never
+ * completed or its outcome is missing/outside the schema. Not "no_answer":
+ * we don't know what happened, so it's never retried or read as a cancel. */
+function readOutcome(call, schema) {
+  const outcome = (call.structured_result || {}).outcome;
+  if (call.status !== "completed" || !schema.properties.outcome.enum.includes(outcome)) {
+    return "wrong_person_or_unclear";
+  }
+  return outcome;
+}
+
 function advanceToNextAppointment(state) {
   state.cursor.apptIndex += 1;
   state.cursor.phase = "confirm";
@@ -400,6 +436,11 @@ function applyOutcome(state, outcome) {
       state.log.push(`${label} → ${appt.patient} asked to reschedule ${appt.time}`);
       state.log.push(`${appt.patient} moved to a future slot; ${appt.time} freed`);
       advanceToNextAppointment(state);
+    } else if (outcome === "wrong_person_or_unclear") {
+      appt.status = "needs_attention";
+      state.log.push(`${label} → unclear who answered for ${appt.patient}`);
+      state.log.push(`${appt.patient}: couldn't confirm who answered — flagged for a human to check`);
+      advanceToNextAppointment(state);
     } else {
       appt.status = "needs_attention";
       state.log.push(`${appt.patient} unreachable — flagged for the clinic`);
@@ -415,6 +456,10 @@ function applyOutcome(state, outcome) {
       state.waitlist.splice(cursor.waitlistIndex, 1);
       state.log.push(`Backfill call → ${entry.name} accepted the ${appt.time} slot`);
       state.log.push(`Slot ${appt.time} refilled — ₹${appt.fee} recovered`);
+      advanceToNextAppointment(state);
+    } else if (outcome === "wrong_person_or_unclear") {
+      state.log.push(`Backfill call → unclear who answered for ${entry.name}`);
+      state.log.push(`Slot ${appt.time}: couldn't confirm who answered — backfill paused for a human to check`);
       advanceToNextAppointment(state);
     } else {
       state.log.push(
@@ -445,7 +490,7 @@ async function stepEvening(env, state) {
       if (!["completed", "failed", "canceled"].includes(call.status)) {
         return state; // still ringing — nothing to do this tick
       }
-      outcome = (call.structured_result || {}).outcome || "no_answer";
+      outcome = readOutcome(call, cursor.pendingKind === "offer" ? OFFER_SCHEMA : CONFIRM_SCHEMA);
     }
     applyOutcome(state, outcome);
     cursor.pendingCallId = null;
@@ -461,7 +506,7 @@ async function stepEvening(env, state) {
   const appt = state.appointments[cursor.apptIndex];
   if (cursor.phase === "confirm") {
     const kind = appt._retried ? "retry" : "confirm";
-    const idKey = `slotsaver-evening-${state.date}-${appt.id}-${kind}`;
+    const idKey = `slotsaver-evening-${state.date}-${runKey(state)}-${appt.id}-${kind}`;
     const task = buildConfirmTask(appt.patient, appt.time);
     cursor.pendingCallId = state.dryRun
       ? `dryrun-${Date.now()}`
@@ -474,7 +519,7 @@ async function stepEvening(env, state) {
       advanceToNextAppointment(state);
     } else {
       const entry = state.waitlist[cursor.waitlistIndex];
-      const idKey = `slotsaver-evening-${state.date}-${appt.id}-offer-${entry.id}`;
+      const idKey = `slotsaver-evening-${state.date}-${runKey(state)}-${appt.id}-offer-${entry.id}`;
       const task = buildOfferTask(entry.name, appt.time);
       cursor.pendingCallId = state.dryRun
         ? `dryrun-${Date.now()}`
@@ -554,11 +599,17 @@ async function handleEveningStart(request, env) {
   // A dry run must never clobber a real run that's actively in progress
   // (e.g. testing the UI while the automatic evening cron is mid-flight).
   const existing = await loadEveningState(env);
-  if (dryRun && existing && existing.status === "running" && !existing.dryRun) {
-    return json({ error: "a real evening run is in progress — wait for it to finish before testing" }, 409);
+  if (existing && existing.status === "running" && !existing.dryRun) {
+    return json({ error: "a real evening run is in progress — wait for it to finish" }, 409);
   }
 
   const state = initEveningState(phones, !!dryRun);
+  if (!dryRun) {
+    // Same cooldown + daily cap as single calls, charged for the expected
+    // calls (one per appointment and waitlist entry).
+    const rl = await checkAndBumpRateLimit(env, token, state.appointments.length + state.waitlist.length);
+    if (!rl.ok) return json({ error: rl.error }, 429);
+  }
   await saveEveningState(env, state);
   return json({ board: projectBoard(state), done: false });
 }
@@ -579,6 +630,9 @@ async function handleEveningStep(request, env) {
   if (state.status !== "running") return json({ board: projectBoard(state), done: true });
 
   const { busy, result } = await withEveningLock(env, async () => {
+    // Re-read under the lock: another step may have saved since the read above.
+    const state = await loadEveningState(env);
+    if (!state || state.status !== "running") return state;
     try {
       await stepEvening(env, state);
     } catch (err) {
@@ -588,6 +642,7 @@ async function handleEveningStep(request, env) {
     return state;
   });
   if (busy) return json({ board: projectBoard(state), done: false, busy: true });
+  if (!result) return json({ error: "evening run expired" }, 404);
   return json({ board: projectBoard(result), done: result.status !== "running" });
 }
 

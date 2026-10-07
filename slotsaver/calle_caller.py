@@ -5,6 +5,10 @@ Strands agent are oblivious to which one is wired in. Each call sends a
 natural-language task (Asha's script) plus a result_schema, so CALL-E itself
 returns the structured outcome — no transcript parsing here.
 
+A call that never completes, or completes without a valid outcome, comes back
+as wrong_person_or_unclear rather than no_answer: we don't know what happened
+on it, so it must not be retried or treated as a cancellation.
+
 Safety: refuses to dial any number not in ALLOWED_DEMO_PHONES (.env,
 comma-separated). The demo dataset's numbers are fictional; only phones we
 own may ever ring.
@@ -24,7 +28,13 @@ _CONFIRM_SCHEMA = {
     "properties": {
         "outcome": {
             "type": "string",
-            "enum": ["confirmed", "cancelled", "reschedule", "no_answer"],
+            "enum": [
+                "confirmed",
+                "cancelled",
+                "reschedule",
+                "no_answer",
+                "wrong_person_or_unclear",
+            ],
         },
         "notes": {"type": "string"},
     },
@@ -35,11 +45,18 @@ _OFFER_SCHEMA = {
     "type": "object",
     "required": ["outcome"],
     "properties": {
-        "outcome": {"type": "string", "enum": ["accepted", "declined", "no_answer"]},
+        "outcome": {
+            "type": "string",
+            "enum": ["accepted", "declined", "no_answer", "wrong_person_or_unclear"],
+        },
         "notes": {"type": "string"},
     },
     "additionalProperties": False,
 }
+
+# Outcomes whose CALL-E notes are worth showing in the ops log.
+_NOTED_CONFIRM = {ConfirmResult.NO_ANSWER, ConfirmResult.WRONG_PERSON_OR_UNCLEAR}
+_NOTED_OFFER = {OfferResult.NO_ANSWER, OfferResult.WRONG_PERSON_OR_UNCLEAR}
 
 
 def allowed_phones() -> set[str]:
@@ -92,7 +109,8 @@ class CalleCaller:
             timeout_seconds=self.timeout_seconds,
         )
         result = call.get("structured_result") or {}
-        if call.get("status") != "completed" or "outcome" not in result:
+        valid = schema["properties"]["outcome"]["enum"]
+        if call.get("status") != "completed" or result.get("outcome") not in valid:
             attempts = (call.get("recipients") or [{}])[0].get("attempts") or []
             sip = attempts[-1].get("failure_code") if attempts else None
             notes = f"call status: {call.get('status')}"
@@ -100,21 +118,26 @@ class CalleCaller:
                 notes += f" · {call['failure_message']}"
             if sip:
                 notes += f" · SIP {sip}"
-            return {"outcome": "no_answer", "notes": notes}
+            return {"outcome": "wrong_person_or_unclear", "notes": notes}
         return result
 
     def confirm_call(self, appt: Appointment, clinic_name: str) -> CallOutcome:
         task = (
             f"You are {self.persona}, the friendly phone assistant of {clinic_name}. "
-            f"Call {appt.patient} and confirm their appointment TOMORROW at "
+            f"Call {appt.patient} and first confirm you are speaking with "
+            f"{appt.patient} — if the person on the line says they are someone "
+            f"else, or you cannot tell who you are speaking with, do not discuss "
+            f"the appointment; end the call politely (wrong_person_or_unclear). "
+            f"Otherwise, confirm their appointment TOMORROW at "
             f"{appt.time} with {appt.doctor}. Introduce yourself as the clinic's "
             f"assistant up front. You are talking to a person — never press any "
             f"phone keys and never wait on hold. The moment you have the answer, "
             f"thank them, say goodbye, and end the call; keep it under 45 seconds. "
             f"Outcomes: they will come (confirmed); they cancel "
             f"(cancelled) — thank them and say the slot will be freed; they want a "
-            f"different time (reschedule); nobody answered or it wasn't them "
-            f"(no_answer)."
+            f"different time (reschedule); nobody answered (no_answer); you "
+            f"reached someone but could not confirm it was {appt.patient}, or the "
+            f"call was too ambiguous to classify (wrong_person_or_unclear)."
         )
         result = self._run(f"{appt.id}-confirm", appt.phone, task, _CONFIRM_SCHEMA)
         outcome = ConfirmResult(result["outcome"])
@@ -123,9 +146,10 @@ class CalleCaller:
             ConfirmResult.CANCELLED: f"{appt.patient} cancelled {appt.time}",
             ConfirmResult.RESCHEDULE: f"{appt.patient} asked to reschedule {appt.time}",
             ConfirmResult.NO_ANSWER: f"{appt.patient} did not answer",
+            ConfirmResult.WRONG_PERSON_OR_UNCLEAR: f"unclear who answered for {appt.patient}",
         }
         summary = summaries[outcome]
-        if outcome is ConfirmResult.NO_ANSWER and result.get("notes"):
+        if outcome in _NOTED_CONFIRM and result.get("notes"):
             summary += f" ({result['notes']})"
         return CallOutcome(outcome, summary)
 
@@ -134,8 +158,12 @@ class CalleCaller:
     ) -> CallOutcome:
         task = (
             f"You are {self.persona}, the friendly phone assistant of {clinic_name}. "
-            f"Call {entry.name}, who asked us for an earlier appointment. A slot "
-            f"just opened TOMORROW at {appt.time} with {appt.doctor}. Offer it to "
+            f"Call {entry.name}, who asked us for an earlier appointment, and "
+            f"first confirm you are speaking with {entry.name} — if the person on "
+            f"the line says they are someone else, or you cannot tell who you are "
+            f"speaking with, do not offer the slot; end the call politely "
+            f"(wrong_person_or_unclear). Otherwise, tell them a slot just opened "
+            f"TOMORROW at {appt.time} with {appt.doctor} and offer it to "
             f"them. Introduce yourself as the clinic's assistant up front. You are "
             f"talking to a person — never press any phone keys and never wait on "
             f"hold. The moment you have the answer, thank them, say goodbye, and "
@@ -143,7 +171,9 @@ class CalleCaller:
             f"Outcomes: they take the slot (accepted) — "
             f"tell them they are booked and the clinic will see them tomorrow; they "
             f"don't want it (declined) — they stay on the list; nobody answered "
-            f"(no_answer)."
+            f"(no_answer); you reached someone but could not confirm it was "
+            f"{entry.name}, or the call was too ambiguous to classify "
+            f"(wrong_person_or_unclear)."
         )
         result = self._run(
             f"{appt.id}-offer-{entry.id}", entry.phone, task, _OFFER_SCHEMA
@@ -153,8 +183,9 @@ class CalleCaller:
             OfferResult.ACCEPTED: f"{entry.name} accepted the {appt.time} slot",
             OfferResult.DECLINED: f"{entry.name} declined the {appt.time} slot",
             OfferResult.NO_ANSWER: f"{entry.name} did not answer",
+            OfferResult.WRONG_PERSON_OR_UNCLEAR: f"unclear who answered for {entry.name}",
         }
         summary = summaries[outcome]
-        if outcome is OfferResult.NO_ANSWER and result.get("notes"):
+        if outcome in _NOTED_OFFER and result.get("notes"):
             summary += f" ({result['notes']})"
         return CallOutcome(outcome, summary)

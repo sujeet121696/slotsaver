@@ -1,8 +1,11 @@
 """Caller abstraction: the engine talks to phones only through this interface.
 
-MockCaller scripts outcomes for local testing; CalleCaller (later) places real
-calls through CALL-E's plan_call -> run_call -> get_call_run loop. The engine
-never knows which one it's using.
+MockCaller scripts outcomes for local testing; CalleCaller (calle_caller.py)
+places real calls through CALL-E. The engine never knows which one it's using.
+
+WRONG_PERSON_OR_UNCLEAR covers both "someone else picked up" and "the call
+gave us no usable result". Either way we don't know what happened, so it is
+never treated as a no-answer (no retry) or a cancellation (no slot freed).
 """
 
 from dataclasses import dataclass
@@ -17,12 +20,14 @@ class ConfirmResult(str, Enum):
     CANCELLED = "cancelled"
     RESCHEDULE = "reschedule"
     NO_ANSWER = "no_answer"
+    WRONG_PERSON_OR_UNCLEAR = "wrong_person_or_unclear"
 
 
 class OfferResult(str, Enum):
     ACCEPTED = "accepted"
     DECLINED = "declined"
     NO_ANSWER = "no_answer"
+    WRONG_PERSON_OR_UNCLEAR = "wrong_person_or_unclear"
 
 
 @dataclass
@@ -70,6 +75,7 @@ class MockCaller:
             ConfirmResult.CANCELLED: f'{appt.patient} cancelled {appt.time}',
             ConfirmResult.RESCHEDULE: f'{appt.patient} asked to reschedule {appt.time}',
             ConfirmResult.NO_ANSWER: f'{appt.patient} did not answer',
+            ConfirmResult.WRONG_PERSON_OR_UNCLEAR: f'unclear who answered for {appt.patient}',
         }
         return CallOutcome(result, summaries[result])
 
@@ -82,5 +88,6 @@ class MockCaller:
             OfferResult.ACCEPTED: f'{entry.name} accepted the {appt.time} slot',
             OfferResult.DECLINED: f'{entry.name} declined the {appt.time} slot',
             OfferResult.NO_ANSWER: f'{entry.name} did not answer',
+            OfferResult.WRONG_PERSON_OR_UNCLEAR: f'unclear who answered for {entry.name}',
         }
         return CallOutcome(result, summaries[result])

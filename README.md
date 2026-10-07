@@ -20,9 +20,10 @@ EVENING RUN
 2. Confirm-call every patient
    ├─ confirms         → CONFIRMED
    ├─ no answer        → retry once, then flag NEEDS-ATTENTION
-   ├─ reschedules      → slot freed
+   ├─ wrong person / unclear → flag NEEDS-ATTENTION (no retry, slot kept)
+   ├─ reschedules      → slot freed (patient keeps a future booking)
    └─ cancels          → slot freed
-3. Freed slot → call the waitlist in order until someone accepts
+3. Cancelled slot → call the waitlist in order until someone accepts
 4. Morning report: X confirmed · Y cancelled · Z backfilled · ₹ recovered
 ```
 
@@ -45,8 +46,10 @@ Morning report — slots recovered, rupees saved
 - **Telephony:** [CALL-E](https://heycall-e.com) via the official `calle-ai`
   SDK (`slotsaver/calle_caller.py`). Each call sends a natural-language task
   plus a JSON `result_schema`, so CALL-E returns the outcome
-  (`confirmed` / `cancelled` / `reschedule` / `no_answer`) already structured —
-  no transcript parsing.
+  (`confirmed` / `cancelled` / `reschedule` / `no_answer` /
+  `wrong_person_or_unclear`) already structured — no transcript parsing.
+  A call that fails or returns no valid outcome is treated as unclear and
+  flagged for a human, never guessed.
 - **Dry-run by default:** with no API keys set, everything runs on a scripted
   `MockCaller` — no call is ever placed, no account needed.
 
@@ -323,8 +326,9 @@ own every evening; leave it off for manual-only control.
 ```
 
 Pure stdlib, no keys, no calls — exercises every branch of the evening loop
-(confirm, cancel → backfill after a decline, no-answer → retry, reschedule)
-on the MockCaller, including the exact 3-call demo scenario.
+(confirm, cancel → backfill after a decline, no-answer → retry, reschedule,
+wrong person / unclear → flagged) on the MockCaller, including the exact
+3-call demo scenario, plus the tool guards the agent brain can't bypass.
 
 ## Beyond clinics
 
