@@ -5,9 +5,11 @@ Strands agent are oblivious to which one is wired in. Each call sends a
 natural-language task (Asha's script) plus a result_schema, so CALL-E itself
 returns the structured outcome — no transcript parsing here.
 
-A call that never completes, or completes without a valid outcome, comes back
-as wrong_person_or_unclear rather than no_answer: we don't know what happened
-on it, so it must not be retried or treated as a cancellation.
+A call that never completes, completes without a valid outcome, or fails
+inside the SDK (timeout, network, API error) comes back as
+wrong_person_or_unclear rather than no_answer: we don't know what happened
+on it, so it must not be retried or treated as a cancellation. A rejected
+API key still raises: that's a setup problem, and every call would fail.
 
 Safety: refuses to dial any number not in ALLOWED_DEMO_PHONES (.env,
 comma-separated). The demo dataset's numbers are fictional; only phones we
@@ -17,7 +19,13 @@ own may ever ring.
 import os
 import uuid
 
-from calle import CalleClient
+from calle import (
+    CalleAPIError,
+    CalleAuthenticationError,
+    CalleClient,
+    CalleConnectionError,
+    CalleTimeoutError,
+)
 
 from .caller import CallOutcome, ConfirmResult, OfferResult
 from .models import Appointment, WaitlistEntry
@@ -98,16 +106,23 @@ class CalleCaller:
         self._guard(phone)
         n = self._attempts[key_base] = self._attempts.get(key_base, 0) + 1
         self.calls_placed += 1
-        call = self.client.calls.create_and_wait(
-            task=task,
-            recipients=[
-                {"phones": [phone], "region": self.region, "locale": self.locale}
-            ],
-            result_schema=schema,
-            idempotency_key=f"slotsaver-{self.run_id}-{key_base}-attempt{n}",
-            interval_seconds=2.0,
-            timeout_seconds=self.timeout_seconds,
-        )
+        try:
+            call = self.client.calls.create_and_wait(
+                task=task,
+                recipients=[
+                    {"phones": [phone], "region": self.region, "locale": self.locale}
+                ],
+                result_schema=schema,
+                idempotency_key=f"slotsaver-{self.run_id}-{key_base}-attempt{n}",
+                interval_seconds=2.0,
+                timeout_seconds=self.timeout_seconds,
+            )
+        except CalleAuthenticationError:
+            raise
+        except (CalleAPIError, CalleConnectionError, CalleTimeoutError) as err:
+            # The call may or may not have rung. Flag it rather than crash
+            # the run (the agent brain would otherwise stop mid-evening).
+            return {"outcome": "wrong_person_or_unclear", "notes": f"CALL-E error: {err}"}
         result = call.get("structured_result") or {}
         valid = schema["properties"]["outcome"]["enum"]
         if call.get("status") != "completed" or result.get("outcome") not in valid:

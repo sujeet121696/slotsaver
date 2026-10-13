@@ -141,7 +141,21 @@ Both print the evening's call log, tomorrow's board, and the morning report
 for a scripted scenario (a confirmation, a cancellation + backfill, a retry
 after no-answer, a reschedule).
 
-**Live demo board** — watch slots flip in the browser as calls land:
+**One command for everything local** (needs `npm install` once):
+
+```bash
+npm run local                      # test → clean → build → serve the board + mock run
+npm run local -- --brain strands   # same, with the agent brain (needs GROQ_API_KEY)
+npm test        # both test suites only
+npm run clean   # remove board.json, site/, __pycache__/
+npm run build   # regenerate site/, bundle-check the Worker (dry run), check the Cloudflare login
+npm run board   # serve the board on 127.0.0.1:8787 and play the mock run
+```
+
+It's mock only: `--real` is refused, and nothing is deployed. `build` offers
+`npx wrangler login` when you're not logged in (only deploying needs it).
+
+**Live demo board** by hand — watch slots flip in the browser as calls land:
 
 ```bash
 python3 -m http.server 8787          # terminal 1, from the repo root
@@ -182,7 +196,8 @@ structured outcome CALL-E returned.
 A trimmed 3-call cast where your allowlisted phone plays every patient —
 answer as the first patient (confirm), then Priya (cancel), then Arjun
 (accept the freed slot). It asks for a typed `yes` before dialing, spends
-~3 calls of credit, and the live board updates as each call lands.
+3 calls of credit if everyone answers (up to 6 with retries and repeat
+offers; the prompt prints both), and the live board updates as each call lands.
 
 ## Deploying the hosted demo
 
@@ -196,7 +211,8 @@ backend, no API keys needed at runtime — so it deploys as static assets on
 # 1. One-time: authenticate wrangler with your Cloudflare account
 npx wrangler login
 
-# 2. Build the static site/ folder (gitignored, regenerated each deploy)
+# 2. Build the static site/ folder (gitignored, regenerated each deploy).
+#    `npm run build` does exactly this; the manual steps are:
 mkdir -p site
 cp demo_board.html site/demo_board.html
 cp assets/favicon.svg site/favicon.svg
@@ -229,9 +245,13 @@ call without anyone running Python locally:
 
 ```
 POST /api/call    { id, token } -> { call_id }          places the call
-GET  /api/call     ?id&token    -> { status, outcome }  polled by the page
-GET  /api/numbers  ?token       -> [{ id, label }]       masked number list
+GET  /api/call     ?id          -> { status, outcome }  polled by the page
+GET  /api/numbers               -> [{ id, label }]       masked number list
 ```
+
+POST routes take the token in the JSON body. GET routes take it in an
+`X-SlotSaver-Token` header, never the query string, so it stays out of URLs
+and request logs.
 
 **Security model** — this endpoint can spend real call credit, so it's
 designed so the only way to know it exists is to already hold the secret:
@@ -323,9 +343,11 @@ own every evening; leave it off for manual-only control.
 
 ```bash
 .venv/bin/python -m unittest discover tests
+node --test tests/worker_evening.test.mjs   # the Worker's copy of the loop
+npm test                                    # both of the above
 ```
 
-Pure stdlib, no keys, no calls — exercises every branch of the evening loop
+Pure stdlib (and Node's built-in test runner), no keys, no calls — exercises every branch of the evening loop
 (confirm, cancel → backfill after a decline, no-answer → retry, reschedule,
 wrong person / unclear → flagged) on the MockCaller, including the exact
 3-call demo scenario, plus the tool guards the agent brain can't bypass.
@@ -352,10 +374,11 @@ slotsaver/
 │   ├── board.py         # snapshots state to board.json for the live board
 │   ├── run_demo.py      # the evening run: --brain engine|strands [--slow N]
 │   └── test_call.py     # place exactly ONE real budgeted call
-├── tests/test_engine.py # stdlib unittest suite for the evening loop
+├── tests/              # unittest suites + worker_evening.test.mjs (node --test)
 ├── demo_board.html      # live browser board (serve via python -m http.server)
 ├── assets/              # logo.svg (README/branding) + favicon.svg (hosted site)
-├── worker/index.js      # Cloudflare Worker: serves site/ + the token-gated /api/call routes
+├── worker/index.js      # Cloudflare Worker: serves site/ + the token-gated /api/* routes
+├── worker/evening.mjs   # the Worker's evening loop, pure and tested
 ├── wrangler.jsonc       # Worker config: project name, assets dir, KV binding, custom domain
 ├── requirements.txt
 ├── .env.example

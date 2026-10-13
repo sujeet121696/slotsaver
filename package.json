@@ -1,4 +1,13 @@
 {
+  "private": true,
+  "scripts": {
+    "local": "node scripts/local.mjs",
+    "local:tunnel": "node scripts/local.mjs tunnel",
+    "test": "node scripts/local.mjs test",
+    "clean": "node scripts/local.mjs clean",
+    "build": "node scripts/local.mjs build",
+    "board": "node scripts/local.mjs run"
+  },
   "devDependencies": {
     "wrangler": "^4.131.1"
   }

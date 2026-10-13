@@ -17,14 +17,17 @@
 ## Commands
 
 ```
+npm run local                                                    # test → clean → build → board + mock run (mock only)
+npm test                                                         # both test suites
 .venv\Scripts\python.exe -m unittest discover tests              # tests (no keys, no calls)
+node --test tests/worker_evening.test.mjs                        # Worker loop tests (no keys, no calls)
 .venv\Scripts\python.exe -m slotsaver.run_demo                   # dry run, deterministic brain
 .venv\Scripts\python.exe -m slotsaver.run_demo --brain strands   # dry run, agent brain (needs GROQ_API_KEY)
-npx wrangler deploy                                              # hosted board (build site/ first, see README)
+npx wrangler deploy                                              # owner only: hosted board (build site/ first, see README)
 ```
 
 ## Top rules
 
 - Never commit, push or open a PR. The owner commits manually.
-- Never place real calls. Suggest the command instead.
+- Never place real calls or deploy. Suggest the command instead.
 - Never copy anything from `docs/SUBMISSION.md` or `backup/` into tracked files. They are private, gitignored notes.

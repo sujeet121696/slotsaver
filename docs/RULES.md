@@ -5,6 +5,7 @@
 ## 1. Git
 
 - **Never commit, push or open a PR.** The owner commits manually.
+- `.claude/settings.json` enforces this: a hook (`.claude/hooks/guard.mjs`) blocks commit, push, `gh pr create`, `wrangler deploy` (except `--dry-run`), `test_call` and `run_demo --real`, and deny rules block reading `.env` and `.dev.vars`. Don't weaken it to get a task done; ask the owner.
 - Leave changes in the working tree and summarise what changed.
 
 ## 2. Real calls
@@ -15,6 +16,7 @@ Real calls cost money and ring real phones.
 - Never run `test_call` or `--real` yourself. Suggest the command instead.
 - Keep the typed-`yes` gate. Calls go one at a time, and nothing is queued.
 - Idempotency keys must be unique per run (CALL-E dedupes them forever).
+- A failed or unreadable call is `wrong_person_or_unclear`, never `no_answer` or a cancellation. Only a rejected API key stops the run.
 - Call tasks never tell the bot to press keys or wait on hold. Calls stay under about 45 seconds.
 
 ## 3. Hosted Worker
@@ -22,6 +24,9 @@ Real calls cost money and ring real phones.
 - Real numbers never reach the browser. The browser gets a masked label and an opaque id only.
 - Compare tokens in constant time. Without a token, the page shows no hint of the controls.
 - Keep the rate limits: 60s cooldown, 5 calls a day per token.
+- Every path that can dial (single call, manual run, Cron) is charged before it dials, including retries and repeat offers.
+- The token goes in the JSON body (POST) or the `X-SlotSaver-Token` header (GET). Never put it in a URL.
+- Never deploy. The owner runs `npx wrangler deploy`, after rebuilding `site/`, so the board and Worker always ship together.
 - Cron autorun stays **off by default**.
 
 ## 4. Data and secrets
@@ -33,13 +38,13 @@ Real calls cost money and ring real phones.
 ## 5. Code
 
 - State changes only inside tools or engine functions. The LLM only chooses the order of calls.
-- A change to the evening loop must be made in both Python and the Worker's JavaScript.
+- A change to the evening loop must be made in both Python (`tools.py`) and the Worker's JavaScript (`worker/evening.mjs`), with a test on each side.
 - Keep `strands`/`calle` imports lazy so the dry run works without packages.
 - Match the existing style: small modules, type hints, docstrings that explain *why*.
 - `demo_board.html` stays one self-contained file with no build step.
 
 ## 6. Workflow
 
-- Run the tests after any loop change, and add a test for each new branch.
+- Run both test suites after any loop change (`unittest` and `node --test`), and add a test for each new branch.
 - Update `README.md` when setup changes, and `docs/` when scope or architecture changes.
 - Windows: use `.venv\Scripts\python.exe`. If `--brain strands` fails with a `pydantic_core` ABI error, recreate `.venv`.

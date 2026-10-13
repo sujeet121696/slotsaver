@@ -31,6 +31,7 @@ from .caller import ConfirmResult, MockCaller, OfferResult
 from .config import load_config
 from .demo_data import demo_state, real_demo_state
 from .engine import run_evening
+from .tools import MAX_CALLS_PER_PERSON
 
 
 def _ensure_utf8_stdio() -> None:
@@ -42,6 +43,23 @@ def _ensure_utf8_stdio() -> None:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
+
+
+def _flag_value(flag: str) -> str:
+    """The value after a flag, with a usage error instead of an IndexError."""
+    idx = sys.argv.index(flag)
+    if idx + 1 >= len(sys.argv) or sys.argv[idx + 1].startswith("--"):
+        raise SystemExit(f"{flag} needs a value")
+    return sys.argv[idx + 1]
+
+
+def max_calls(state) -> int:
+    """Worst case for one evening, from the tools.py rules: each appointment
+    gets a confirm plus at most one retry, and each waitlist person is
+    called at most MAX_CALLS_PER_PERSON times (once per cancelled slot)."""
+    appts = len(state.appointments)
+    offers_each = min(MAX_CALLS_PER_PERSON, appts)
+    return 2 * appts + offers_each * len(state.waitlist)
 
 
 class SlowCaller:
@@ -87,7 +105,7 @@ def main() -> None:
 
     brain = "engine"
     if "--brain" in sys.argv:
-        brain = sys.argv[sys.argv.index("--brain") + 1]
+        brain = _flag_value("--brain")
     if brain not in ("engine", "strands"):
         raise SystemExit(f"unknown brain '{brain}' — use engine or strands")
 
@@ -128,7 +146,10 @@ def main() -> None:
             timeout_seconds=config.calle_timeout_seconds,
         )
         calls = len(state.appointments) + len(state.waitlist)
-        print(f"REAL CALLS: about to dial {phone} ~{calls} times (spends credits).")
+        print(
+            f"REAL CALLS: about to dial {phone} {calls} times if everyone answers, "
+            f"up to {max_calls(state)} with retries (spends credits)."
+        )
         print(
             f"Answer as: {config.test_patient_name} (confirm) → "
             f"Priya (cancel) → Arjun (accept the slot)."
@@ -164,7 +185,11 @@ def main() -> None:
         caller = build_caller(config)
 
     if "--real" not in sys.argv and "--slow" in sys.argv:
-        caller = SlowCaller(caller, float(sys.argv[sys.argv.index("--slow") + 1]))
+        try:
+            delay = float(_flag_value("--slow"))
+        except ValueError:
+            raise SystemExit("--slow needs a number of seconds") from None
+        caller = SlowCaller(caller, delay)
 
     attach_board(state)
 

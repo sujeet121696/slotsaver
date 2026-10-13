@@ -11,7 +11,8 @@
 | Telephony | CALL-E (`calle-ai`): task + JSON `result_schema` gives structured outcomes |
 | Live board | Single static `demo_board.html` |
 | Hosting | Cloudflare Worker + static assets + KV + Cron Trigger |
-| Tests | stdlib `unittest` |
+| Tests | stdlib `unittest`; `node --test` for the Worker loop |
+| Local tasks | `scripts/local.mjs` behind `npm run local / test / clean / build / board` |
 
 ## 2. Flow
 
@@ -48,7 +49,10 @@ demo_data.py ──► ClinicState
 
 `strands` and `calle` are imported lazily, only when that brain or caller is used, so the dry run needs no packages.
 
-## 4. Cloudflare Worker (`worker/index.js`)
+## 4. Cloudflare Worker (`worker/`)
+
+- `index.js`: routes, KV, the lock, rate limits and CALL-E `fetch`.
+- `evening.mjs`: the evening loop as a pure state machine. `index.js` passes in the CALL-E calls and the extra-call charge, and `tests/worker_evening.test.mjs` drives it with fakes.
 
 - Serves `site/` through the `ASSETS` binding.
 - KV `RATE_LIMIT` holds cooldowns, the autorun flag and evening-run state.
@@ -63,10 +67,12 @@ demo_data.py ──► ClinicState
 | `GET/POST /api/evening/autorun` | Read / toggle the Cron autorun |
 | `POST /api/evening/start`, `/step` | Run the evening sequence (supports `dryRun`) |
 
-Every route needs the `CALL_TRIGGER_TOKEN`. Without it, the route returns a flat `403`.
+Every route needs the `CALL_TRIGGER_TOKEN`: in the JSON body for POST, in the `X-SlotSaver-Token` header for GET (never the query string). Without it, the route returns a flat `403`.
 
 - Idempotency keys carry a per-run `runId`, so a second run on the same day dials instead of getting cached calls.
-- A real evening run is charged against the same cooldown and daily cap as single calls (one unit per expected call), and can't start while another real run is running.
+- A real evening run, manual or Cron, is charged against the same cooldown and daily cap as single calls: one unit per appointment and waitlist entry up front, then one more for each retry or repeat offer. If the daily cap says no mid-run, that call isn't placed and the slot is left for the clinic.
+- A real run can't start while another real run is running.
+- After 5 failed steps in a row (CALL-E errors), the run stops and flags whatever is still `scheduled`.
 
 > ⚠️ The evening loop exists twice: in Python (`engine.py`/`agent.py`) and in JavaScript (the Worker). Keep them consistent.
 

@@ -2,7 +2,7 @@
 
 > Progress tracker. Move items between sections as work happens.
 
-_Last updated: 2026-10-06_
+_Last updated: 2026-10-13_
 
 ## In progress: `NextVersion`
 
@@ -16,7 +16,12 @@ build (tag `hackathon-submission-2026-09-14`) until judging is over.
 - [x] `tools.py`: rule guards shared by both brains
 - [x] Worker: evening runs count against the rate limit; no second real run while one is running
 - [x] Tests for all of the above (Python: `tests/test_tools.py`)
-- [ ] Deploy with `npx wrangler deploy` once judging is over
+- [x] Worker loop moved to `worker/evening.mjs` with `node --test` tests; first no-answer now flags the slot like Python, and the ≤2 calls per person guard is enforced
+- [x] Cron autorun charged against the rate limit; retries and repeat offers charged one by one; a run stops after 5 failed steps in a row
+- [x] Token sent in an `X-SlotSaver-Token` header on GET routes instead of the query string
+- [x] Python: CALL-E SDK errors become `wrong_person_or_unclear` (a bad API key still stops the run); board push runs in the background; `--real` prints the worst-case call count
+- [x] `npm run local`: test, clean, build (site/ + Worker dry run + login check), then the board with a mock run
+- [ ] Deploy with `npx wrangler deploy` once judging is over (rebuild `site/` first: the board and Worker changed together)
 - [ ] Rehearse once with `--take`, then one real `--real` check
 
 ## Backlog
@@ -38,3 +43,4 @@ build (tag `hackathon-submission-2026-09-14`) until judging is over.
 - [x] Cloudflare Worker: hosted board, token-gated calls, real evening run, Cron toggle, board push
 - [x] Tests for every loop branch + the 3-call demo scenario
 - [x] Hackathon submissions: CALL-E and AWS Agents for Humans (2026-09-14)
+- [x] SlotSaver skill merged into CALLE-AI/awesome-phone-call-agents (PR #542, 2026-10-08)

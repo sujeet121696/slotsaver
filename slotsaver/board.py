@@ -12,6 +12,7 @@ either unset, nothing changes and no network call is ever made.
 
 import json
 import os
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -61,13 +62,49 @@ def _write(state: ClinicState, path: Path) -> None:
     _push(snapshot)
 
 
+_push_lock = threading.Lock()
+_pending: dict | None = None  # newest snapshot not yet sent
+_pusher: threading.Thread | None = None
+
+
 def _push(snapshot: dict) -> None:
-    """Best-effort relay to the hosted board endpoint; never raises — a
-    network hiccup or missing config must never interrupt a real run."""
+    """Hands the snapshot to a background sender and returns at once.
+
+    Sending inline blocked the evening run for up to ~20s per state change
+    while the Worker was unreachable (3 tries × 5s timeout + backoff), and
+    there are several changes per call. Only the newest snapshot matters,
+    so one sender thread pushes whatever is latest and skips the rest. It
+    isn't a daemon thread, so the final snapshot still goes out before the
+    process exits.
+    """
+    global _pending, _pusher
     url = os.environ.get("BOARD_PUSH_URL")
     token = os.environ.get("BOARD_PUSH_TOKEN")
     if not url or not token:
         return
+    with _push_lock:
+        _pending = snapshot
+        if _pusher is None or not _pusher.is_alive():
+            _pusher = threading.Thread(
+                target=_drain, args=(url, token), name="board-push"
+            )
+            _pusher.start()
+
+
+def _drain(url: str, token: str) -> None:
+    global _pending, _pusher
+    while True:
+        with _push_lock:
+            snapshot, _pending = _pending, None
+            if snapshot is None:
+                _pusher = None
+                return
+        _send(url, token, snapshot)
+
+
+def _send(url: str, token: str, snapshot: dict) -> None:
+    """Best-effort relay to the hosted board endpoint; never raises — a
+    network hiccup or missing config must never interrupt a real run."""
     body = json.dumps({"token": token, "snapshot": snapshot}).encode()
     request = urllib.request.Request(
         url,
