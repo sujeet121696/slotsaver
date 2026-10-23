@@ -1,4 +1,5 @@
-"""Place exactly ONE real CALL-E confirm call to a phone you own.
+"""Place exactly ONE real confirm call to a phone you own, on the provider
+CALLER picks (calle by default, or vobiz).
 
     .venv/bin/python -m slotsaver.test_call +91XXXXXXXXXX
 
@@ -8,9 +9,10 @@ ALLOWED_DEMO_PHONES in .env — the caller refuses anything else.
 
 import sys
 
-from .calle_caller import CalleCaller, allowed_phones
+from .caller import allowed_phones
 from .config import load_config
 from .models import Appointment
+from .providers import LABELS, real_caller
 from .run_demo import _ensure_utf8_stdio
 
 
@@ -23,7 +25,7 @@ def main() -> None:
 
     config = load_config()
     if not config.real_calls_enabled:
-        raise SystemExit("CALLE_API_KEY is not set in .env")
+        raise SystemExit(f"{config.missing_call_keys} is not set in .env")
     if phone not in allowed_phones():
         raise SystemExit(
             f"{phone} is not in ALLOWED_DEMO_PHONES (.env). Add it first — "
@@ -33,15 +35,10 @@ def main() -> None:
     appt = Appointment(
         "test1", config.test_patient_name, phone, "10:00 AM", config.doctor_name, 800
     )
-    caller = CalleCaller(
-        config.calle_api_key,
-        config.agent_persona,
-        region=config.calle_region,
-        locale=config.calle_locale,
-        timeout_seconds=config.calle_timeout_seconds,
-    )
+    caller = real_caller(config)
 
-    print(f"Placing ONE confirm call to {phone} — answer as the patient…")
+    print(f"Placing ONE confirm call to {phone} via {LABELS[config.caller]} "
+          "— answer as the patient…")
     outcome = caller.confirm_call(appt, config.clinic_name)
     print(f"\nResult: {outcome.result.value}\nSummary: {outcome.summary}")
 

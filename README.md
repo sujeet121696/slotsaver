@@ -2,394 +2,146 @@
 
 # SlotSaver
 
-**An AI front-desk agent that rescues cancelled appointment slots.**
+**An AI front-desk agent that fills cancelled appointment slots.**
 
-Every evening, "Asha" calls tomorrow's patients to confirm. When someone
-cancels, she immediately calls the waitlist and fills the empty slot — the
-call no human receptionist ever makes. Reminders are the commodity;
-**backfill is the product.**
+Every evening, "Asha" phones tomorrow's patients to confirm. When someone cancels, she calls the waitlist straight away and fills the empty slot. Reminders are everywhere; **refilling the slot is the product.**
 
-Clinic no-show rates run 15–30%. Every empty slot is paid-for chair time,
-staff time and rent producing zero revenue — and nobody calls a waitlist at
-9 PM to refill a slot that just opened for 11 AM tomorrow. The slot simply
-dies. SlotSaver makes that call.
+> Demo data is fictional. No real patient data is used anywhere.
+
+## How it works
 
 ```
 EVENING RUN
-1. Read tomorrow's appointments + waitlist
-2. Confirm-call every patient
-   ├─ confirms         → CONFIRMED
-   ├─ no answer        → retry once, then flag NEEDS-ATTENTION
-   ├─ wrong person / unclear → flag NEEDS-ATTENTION (no retry, slot kept)
-   ├─ reschedules      → slot freed (patient keeps a future booking)
-   └─ cancels          → slot freed
-3. Cancelled slot → call the waitlist in order until someone accepts
-4. Morning report: X confirmed · Y cancelled · Z backfilled · ₹ recovered
+1. Read tomorrow's appointments and the waitlist
+2. Call each patient to confirm
+   ├─ confirms                → CONFIRMED
+   ├─ no answer               → retry once, then NEEDS ATTENTION
+   ├─ wrong person / unclear  → NEEDS ATTENTION (no retry, slot kept)
+   ├─ reschedules             → slot freed (the clinic rebooks them)
+   └─ cancels                 → slot freed
+3. Freed slot → call the waitlist in order until someone accepts
+4. Morning report: confirmed · cancelled · refilled · ₹ recovered
 ```
 
-## Architecture
+| Part | What it does | File |
+|---|---|---|
+| Brain | [Strands Agents](https://strandsagents.com) on [Groq](https://console.groq.com), or a deterministic engine with no dependencies | `slotsaver/agent.py`, `slotsaver/engine.py` |
+| Guards | The only code that changes state: cancelled slots only, waitlist order, at most 2 calls per person | `slotsaver/tools.py` |
+| Calls | `MockCaller` by default; real calls through [CALL-E](https://heycall-e.com), allowlisted numbers only | `slotsaver/caller.py`, `slotsaver/providers/calle.py` |
+| Live board | Browser board that updates as each call finishes | `demo_board.html` |
+| Hosting | Cloudflare Worker: board, token-protected call routes, Cron run | `worker/` |
 
-```
-Demo appointment sheet (fictional data — never real patient data)
-        │
-Strands Agents SDK  — the agent brain deciding which call to place next
-        │  tool calls (all state changes live inside tools)
-        │        └──→ board.json → live browser board (demo_board.html)
-CALL-E  — real telephony: one API call per phone call, structured outcomes
-        │
-Morning report — slots recovered, rupees saved
-```
+More detail: [Architecture](docs/ARCHITECTURE.md) · [Product](docs/PRD.md) · [Call wording](docs/DESIGN.md) · [Rules](docs/RULES.md) · [Telephony options](docs/TELEPHONY.md)
 
-- **Brain:** [AWS Strands Agents SDK](https://strandsagents.com) agent
-  (`slotsaver/agent.py`), LLM served by Groq. A deterministic fallback brain
-  (`slotsaver/engine.py`) runs the same loop with zero dependencies.
-- **Telephony:** [CALL-E](https://heycall-e.com) via the official `calle-ai`
-  SDK (`slotsaver/calle_caller.py`). Each call sends a natural-language task
-  plus a JSON `result_schema`, so CALL-E returns the outcome
-  (`confirmed` / `cancelled` / `reschedule` / `no_answer` /
-  `wrong_person_or_unclear`) already structured — no transcript parsing.
-  A call that fails or returns no valid outcome is treated as unclear and
-  flagged for a human, never guessed.
-- **Dry-run by default:** with no API keys set, everything runs on a scripted
-  `MockCaller` — no call is ever placed, no account needed.
+## Quick start (no keys, no calls, ₹0)
 
-## What the calls sound like (persona: "Asha")
-
-**Confirm call**
-
-> "Hi, this is Asha calling from [clinic name]. Am I speaking with [patient]?
-> I'm just confirming your appointment tomorrow at [time] with [doctor].
-> Will you be able to make it?"
-
-- Yes → "Great, we'll see you at [time]. Have a good evening!"
-- Reschedule → "No problem — I'll free up that slot and the clinic will call
-  you to rebook."
-- Cancel → "Thanks for letting us know — I'll free up that slot."
-
-**Backfill call (to the waitlist)**
-
-> "Hi, this is Asha from [clinic name]. You asked us for an earlier
-> appointment — a slot just opened tomorrow at [time] with [doctor].
-> Would you like it?"
-
-- Yes → "Done, you're booked for [time] tomorrow. See you then!"
-- No → "No problem, we'll keep you on the list. Have a good evening!"
-
-Asha introduces herself as the clinic's assistant up front, keeps every call
-under ~45 seconds, never presses phone keys, and never waits on hold. The
-outcome of one call decides whether the next happens — a cancellation is what
-triggers the backfill call — so these are chained real calls, not one
-scripted call.
-
-## Setup — end to end
-
-### 0. Prerequisites
-
-- Python **3.11+**
-- macOS / Linux shell (Windows: use WSL)
-
-### 1. Accounts & keys (skip any you don't need)
-
-| Account | Where | What you get | Needed for |
-|---|---|---|---|
-| CALL-E | [heycall-e.com](https://heycall-e.com) → sign up → Dashboard → Account → **API Keys** | `CALLE_API_KEY` (`iams_…`) + free trial calls | Real phone calls |
-| Groq | [console.groq.com](https://console.groq.com) → **API Keys** | `GROQ_API_KEY` (`gsk_…`), free tier | The Strands agent brain |
-
-No keys at all? Everything still runs in dry-run mode (step 4).
-
-### 2. Install
+Needs Python 3.11+ and Node 20+.
 
 ```bash
-git clone <this repo> && cd slotsaver
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+git clone https://github.com/<you>/slotsaver && cd slotsaver
+python -m venv .venv
+.venv/bin/pip install -r requirements.txt        # Windows: .venv\Scripts\pip
+npm install
+npm run local
 ```
 
-### 3. Configure
+`npm run local` runs the tests, cleans, builds, then opens a board at http://127.0.0.1:8790/demo_board.html and plays a mock evening run.
+
+| Command | What it does |
+|---|---|
+| `npm run local` | test → clean → build → board + mock run |
+| `npm run local:tunnel` | Same, plus a public `*.trycloudflare.com` link (needs [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)) |
+| `npm run local -- --brain strands` | Same, using the agent brain (needs `GROQ_API_KEY`) |
+| `npm test` | Python and Worker tests (no keys, no calls) |
+| `npm run build` | Rebuild `site/`, check the Worker bundle (dry run), check Cloudflare login |
+| `npm run clean` | Remove generated files |
+| `python -m slotsaver.run_demo` | Terminal-only mock run |
+
+Notes:
+- `npm run local` only does mock runs. It refuses `--real` and never deploys.
+- The board server serves only `.serve/`, never the repo root, so a tunnel link can't expose `.env`.
+- If port 8790 is in use, run `PORT=8791 npm run local`.
+
+## Configure
 
 ```bash
 cp .env.example .env
 ```
 
-Then fill in `.env`:
-
-| Variable | Required? | Meaning |
+| Variable | Needed for | Notes |
 |---|---|---|
-| `CALLE_API_KEY` | For real calls | CALL-E dashboard API key. **Empty = mock caller, no calls placed.** |
-| `ALLOWED_DEMO_PHONES` | For real calls | Comma-separated E.164 numbers real calls may dial — **only phones you own**. Empty = every real call refused. |
-| `GROQ_API_KEY` | For agent brain | Groq key powering the Strands agent. Empty = deterministic engine only. |
-| `GROQ_MODEL` | No | Default `openai/gpt-oss-120b`. |
-| `GROQ_BASE_URL` | No | Any OpenAI-compatible endpoint (default: Groq). |
-| `CLINIC_NAME` / `AGENT_PERSONA` / `DOCTOR_NAME` | No | Demo clinic branding (defaults: Dr. Meera's Dental Clinic / Asha / Dr. Meera). |
-| `CALLE_REGION` / `CALLE_LOCALE` | No | Recipient region + call locale (defaults `IN` / `en-US`). |
-| `CALLE_TIMEOUT_SECONDS` | No | Max wait per call (default 300). |
-| `TEST_PATIENT_NAME` | No | The name `test_call` asks for (default: Rohit Sharma). |
+| `CALLER` | Real calls | `calle` (default) or `vobiz` |
+| `CALLE_API_KEY` | Real calls on CALL-E | Empty = mock caller, no calls placed |
+| `BOLNA_API_KEY`, `BOLNA_AGENT_ID`, `VOBIZ_FROM_NUMBER` | Real calls on Vobiz | Only with `CALLER=vobiz`. Set up the Bolna agent first ([docs/TELEPHONY.md §6](docs/TELEPHONY.md#6-vobiz-via-bolna-setup)) |
+| `ALLOWED_DEMO_PHONES` | Real calls | Comma-separated E.164 numbers you own. Empty = every real call is refused |
+| `GROQ_API_KEY` | Agent brain | Empty = deterministic engine only |
+| `CLINIC_NAME`, `AGENT_PERSONA`, `DOCTOR_NAME` | Branding | Optional |
+| `CALLE_REGION`, `CALLE_LOCALE`, `CALLE_TIMEOUT_SECONDS` | Call settings | Optional, defaults `IN` / `en-US` / `300` |
 
-`.env` is gitignored; keys never leave your machine.
+`.env` is gitignored. Every option is listed in [.env.example](.env.example).
 
-### 4. Dry run — no calls, no keys, ₹0
+## Real calls (costs credit)
+
+Put your own number in `ALLOWED_DEMO_PHONES` first. Run these with `.venv` activated.
 
 ```bash
-# Deterministic engine brain
-.venv/bin/python -m slotsaver.run_demo
-
-# Strands agent brain (needs GROQ_API_KEY)
-.venv/bin/python -m slotsaver.run_demo --brain strands
+python -m slotsaver.test_call +91XXXXXXXXXX                              # exactly one call
+python -m slotsaver.run_demo --brain strands --take --slow 3              # rehearse the take, no calls
+python -m slotsaver.run_demo --brain strands --real +91XXXXXXXXXX         # 3-call real run
 ```
 
-Both print the evening's call log, tomorrow's board, and the morning report
-for a scripted scenario (a confirmation, a cancellation + backfill, a retry
-after no-answer, a reschedule).
+In the real run, your phone plays each patient in turn: confirm, then cancel, then accept the freed slot. It asks you to type `yes` before dialing and prints the worst-case call count (3 if everyone answers, up to 6 with retries).
 
-**One command for everything local** (needs `npm install` once):
+## Telephony providers
 
-```bash
-npm run local                      # test → clean → build → serve the board + mock run
-npm run local -- --brain strands   # same, with the agent brain (needs GROQ_API_KEY)
-npm test        # both test suites only
-npm run clean   # remove board.json, site/, __pycache__/
-npm run build   # regenerate site/, bundle-check the Worker (dry run), check the Cloudflare login
-npm run board   # serve the board on 127.0.0.1:8787 and play the mock run
-```
+| Provider | Status | Notes |
+|---|---|---|
+| Mock | ✅ Built | Default; scripted outcomes |
+| [CALL-E](https://heycall-e.com) | ✅ Built | A complete calling agent: task + JSON schema in, structured outcome out |
+| [Vobiz](https://vobiz.ai) | 🧪 Built, not yet tried on a real call | Indian telephony (numbers, SIP, Voice API) with a [Bolna](https://www.bolna.ai/integrations/vobiz) voice agent on top. `CALLER=vobiz`; setup in [docs/TELEPHONY.md §6](docs/TELEPHONY.md#6-vobiz-via-bolna-setup) |
+| Several at once | 📝 Planned | A router behind the same `Caller` interface that picks a provider per call |
 
-It's mock only: `--real` is refused, and nothing is deployed. `build` offers
-`npx wrangler login` when you're not logged in (only deploying needs it).
+Every provider sits behind the `Caller` interface (`slotsaver/caller.py`), so the brain and guards never change. The comparison, India compliance notes and the recommended path are in [docs/TELEPHONY.md](docs/TELEPHONY.md).
 
-**Live demo board** by hand — watch slots flip in the browser as calls land:
+## Deploy the hosted board (owner only)
 
 ```bash
-python3 -m http.server 8787          # terminal 1, from the repo root
-open http://localhost:8787/demo_board.html
-.venv/bin/python -m slotsaver.run_demo --slow 3   # terminal 2, paced run
-```
-
-Every run writes `board.json` after each state change; the board polls it
-once a second. `--slow 3` paces mock calls ~3s apart so the board tells the
-story at real-call speed.
-
-**Self-playing demo** — `demo_board.html?demo=1` needs no backend at all: it
-replays a real agent evening run on a loop (confirmations, a cancellation,
-waitlist backfills, ₹1,600 recovered). That's what the hosted demo serves —
-see [Deploying the hosted demo](#deploying-the-hosted-demo) below.
-
-### 5. One real test call
-
-```bash
-# 1. Put YOUR OWN number in .env:  ALLOWED_DEMO_PHONES=+91XXXXXXXXXX
-# 2. Place exactly one call (answer as the patient):
-.venv/bin/python -m slotsaver.test_call +91XXXXXXXXXX
-```
-
-Asha calls you, confirms a fictional appointment, and the script prints the
-structured outcome CALL-E returned.
-
-### 6. The full loop with REAL calls
-
-```bash
-# rehearse the exact take first — same cast and order, ₹0, no calls:
-.venv/bin/python -m slotsaver.run_demo --brain strands --take --slow 3
-
-# then the real thing:
-.venv/bin/python -m slotsaver.run_demo --brain strands --real +91XXXXXXXXXX
-```
-
-A trimmed 3-call cast where your allowlisted phone plays every patient —
-answer as the first patient (confirm), then Priya (cancel), then Arjun
-(accept the freed slot). It asks for a typed `yes` before dialing, spends
-3 calls of credit if everyone answers (up to 6 with retries and repeat
-offers; the prompt prints both), and the live board updates as each call lands.
-
-## Deploying the hosted demo
-
-The self-playing board (`demo_board.html?demo=1`) is a static page — no
-backend, no API keys needed at runtime — so it deploys as static assets on
-[Cloudflare Workers](https://developers.cloudflare.com/workers/static-assets/).
-`wrangler.jsonc` already points a Workers project (`slotsaver-board`) at a
-`site/` assets directory and an optional custom domain.
-
-```bash
-# 1. One-time: authenticate wrangler with your Cloudflare account
 npx wrangler login
-
-# 2. Build the static site/ folder (gitignored, regenerated each deploy).
-#    `npm run build` does exactly this; the manual steps are:
-mkdir -p site
-cp demo_board.html site/demo_board.html
-cp assets/favicon.svg site/favicon.svg
-cat > site/index.html <<'EOF'
-<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8">
-<link rel="icon" type="image/svg+xml" href="favicon.svg">
-<meta http-equiv="refresh" content="0; url=demo_board.html?demo=1">
-<link rel="canonical" href="demo_board.html?demo=1"><title>SlotSaver</title>
-</head><body><p>Redirecting to the
-<a href="demo_board.html?demo=1">live demo board</a>…</p></body></html>
-EOF
-
-# 3. Deploy (uses wrangler.jsonc — project name, assets dir, custom domain)
+npm run build
 npx wrangler deploy
 ```
 
-`wrangler deploy` prints both live URLs on success: the `*.workers.dev`
-subdomain and, if the custom domain's zone lives in your Cloudflare account,
-the domain configured under `routes` in `wrangler.jsonc`. Re-run steps 2–3
-any time `demo_board.html` changes — there's nothing to redeploy otherwise
-(no server, no database, no scheduled build).
+`?demo=1` replays a recorded evening run and needs no backend. The Worker also has token-protected routes for one real call, a full real evening run and a Cron autorun (off by default):
+- The token goes in the JSON body for POST and in the `X-SlotSaver-Token` header for GET.
+- Phone numbers never reach the browser.
+- Calls are limited by a 60-second cooldown and 5 a day.
 
-### Optional: a private "trigger a real call" button on the hosted page
+Secrets are set with `npx wrangler secret put` (names in [.dev.vars.example](.dev.vars.example)). See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#4-cloudflare-worker-worker) for the routes.
 
-`worker/index.js` turns the deploy from pure static hosting into a small
-Worker (still serving `site/` via the `ASSETS` binding for everything else)
-that adds two API routes so the hosted board can place one real CALL-E test
-call without anyone running Python locally:
+## Safety
 
-```
-POST /api/call    { id, token } -> { call_id }          places the call
-GET  /api/call     ?id          -> { status, outcome }  polled by the page
-GET  /api/numbers               -> [{ id, label }]       masked number list
-```
-
-POST routes take the token in the JSON body. GET routes take it in an
-`X-SlotSaver-Token` header, never the query string, so it stays out of URLs
-and request logs.
-
-**Security model** — this endpoint can spend real call credit, so it's
-designed so the only way to know it exists is to already hold the secret:
-
-- The real phone numbers in `ALLOWED_DEMO_PHONES` **never reach the
-  browser**. `/api/numbers` returns a masked label (`+9182••••404`) and a
-  small integer `id`; the Worker maps that id back to the real number
-  itself, server-side. A public page's HTML/JS source is always viewable by
-  anyone regardless of what's hidden in the UI, so nothing sensitive is
-  ever embedded in it — only referenced by an opaque id.
-- Every route requires `token` to equal the `CALL_TRIGGER_TOKEN` secret,
-  compared in constant time (hash-then-compare, so a wrong guess can't be
-  timed to find out how much of it matched). No token = a flat `403` from
-  every route, and the page renders identically to any other visitor —
-  no calling UI, no hint the feature exists.
-- `CALLE_API_KEY` lives only as a Worker secret; it's attached to the
-  CALL-E request inside the Worker and never sent to or readable by the
-  browser.
-- A KV-backed cooldown (60s between calls — Cloudflare KV's own TTL floor) and daily cap (5/day) per token
-  limit how much a mistake — or a leaked token — could spend.
-
-**Setup** (after the deploy steps above):
-
-```bash
-# One-time: a KV namespace for the rate limiter
-npx wrangler kv namespace create RATE_LIMIT
-# → paste the printed { "binding": "RATE_LIMIT", "id": "..." } into
-#   wrangler.jsonc under "kv_namespaces" (already done in this repo)
-
-# Generate a private access token — treat it like a password
-node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"
-
-# Push secrets (never written to wrangler.jsonc or git)
-printf '%s' '<your CALL-E API key>'        | npx wrangler secret put CALLE_API_KEY
-printf '%s' '+91XXXXXXXXXX,+91YYYYYYYYYY'  | npx wrangler secret put ALLOWED_DEMO_PHONES
-printf '%s' '<the generated token>'        | npx wrangler secret put CALL_TRIGGER_TOKEN
-
-npx wrangler deploy
-```
-
-Then visit the page **once** with `?key=<the generated token>` appended,
-e.g. `https://slotsaver.kharidwise.com/demo_board.html?key=...` — the page
-saves it to that browser's `localStorage` and immediately rewrites the URL
-to drop the query param, so it isn't left sitting in the address bar,
-browser history, or link previews. A "Trigger a real call" section then
-appears with a button per allowlisted number. Bookmark the **plain** URL
-(without `?key=`) afterwards; that browser already remembers the token.
-Anyone you hand the `?key=...` link to can trigger real calls on your
-credit (rate-limited, not unlimited) — share it the way you'd share a
-password, or not at all.
-
-### Real evening run — manual button, or fully automatic
-
-The same unlocked page also has a **"Real evening run"** section: a
-▶ **Start real evening run** button that places the whole confirm →
-cancel → backfill sequence for real (the trimmed cast the local `--real`
-flow uses), updating the board live as each call resolves. A 🧪 **Test the
-flow** button next to it runs the identical UI/flow simulated, for
-rehearsing safely first.
-
-The same sequence can also run **fully unattended, on a schedule** — a
-Cloudflare [Cron Trigger](https://developers.cloudflare.com/workers/configuration/cron-triggers/)
-(configured in `wrangler.jsonc`, ticking every evening) — but it's **off by
-default**, gated behind a small ON/OFF toggle right on the page
-("Automatic daily run (Cron): OFF/ON · turn on/turn off"). Flipping it
-writes a flag to KV and takes effect immediately, no redeploy needed.
-Turn it on when you actually want SlotSaver dialing your phone(s) on its
-own every evening; leave it off for manual-only control.
-
-## Safety & side effects
-
-- **Real calls only ever reach allowlisted phones.** The demo data's numbers
-  are fictional; `CalleCaller` refuses anything not in `ALLOWED_DEMO_PHONES`
-  before touching the API.
-- All schedule/waitlist mutations happen inside tools — the LLM sequences
-  calls but cannot edit state directly.
-- Idempotency keys (unique per run) are sent on every call-create, so a
-  retry inside a run cannot double-dial the same person.
-- No real patient data anywhere; the appointment sheet is fictional and a
-  real deployment would read the clinic's own sheet.
-- Calls cost trial credits: the test runner places exactly one call per
-  invocation, and the demo scenario is rehearsable end-to-end on the mock.
-- **Cancellation:** every real run asks for a typed `yes` before dialing and
-  aborts placing zero calls otherwise. Ctrl-C between calls stops the run —
-  calls are placed strictly one at a time, so at most the call currently in
-  progress completes; nothing is queued or scheduled for later.
-
-## Tests
-
-```bash
-.venv/bin/python -m unittest discover tests
-node --test tests/worker_evening.test.mjs   # the Worker's copy of the loop
-npm test                                    # both of the above
-```
-
-Pure stdlib (and Node's built-in test runner), no keys, no calls — exercises every branch of the evening loop
-(confirm, cancel → backfill after a decline, no-answer → retry, reschedule,
-wrong person / unclear → flagged) on the MockCaller, including the exact
-3-call demo scenario, plus the tool guards the agent brain can't bypass.
-
-## Beyond clinics
-
-The same evening loop fits any appointment business with a waitlist: salons,
-physio courses ("session 6 of 10" nudges), diagnostic labs (fasting
-reminders), tuition and driving schools. The demo shows a dental clinic;
-swapping the sheet is all it takes.
-
-## Project structure
-
-```
-slotsaver/
-├── slotsaver/
-│   ├── models.py        # Appointment, WaitlistEntry, ClinicState
-│   ├── demo_data.py     # fictional clinic sheet
-│   ├── config.py        # .env loading; mock-by-default switches
-│   ├── caller.py        # Caller protocol + MockCaller (dry-run)
-│   ├── calle_caller.py  # real calls via CALL-E (calle-ai SDK)
-│   ├── engine.py        # deterministic fallback brain
-│   ├── agent.py         # Strands agent brain (tools + policy prompt)
-│   ├── board.py         # snapshots state to board.json for the live board
-│   ├── run_demo.py      # the evening run: --brain engine|strands [--slow N]
-│   └── test_call.py     # place exactly ONE real budgeted call
-├── tests/              # unittest suites + worker_evening.test.mjs (node --test)
-├── demo_board.html      # live browser board (serve via python -m http.server)
-├── assets/              # logo.svg (README/branding) + favicon.svg (hosted site)
-├── worker/index.js      # Cloudflare Worker: serves site/ + the token-gated /api/* routes
-├── worker/evening.mjs   # the Worker's evening loop, pure and tested
-├── wrangler.jsonc       # Worker config: project name, assets dir, KV binding, custom domain
-├── requirements.txt
-├── .env.example
-└── .dev.vars.example    # names of the Worker secrets (see "trigger a real call" above)
-```
+- Real calls reach only allowlisted numbers, and real runs need a typed `yes`.
+- The LLM decides the order of calls but can't edit state; only the guarded tools can.
+- A failed or unclear call is flagged for a human, never guessed.
+- Per-run idempotency keys stop a retry from double-dialing.
+- Keys live only in `.env` or Worker secrets.
 
 ## Troubleshooting
 
-| Symptom | Likely cause / fix |
+| Symptom | Fix |
 |---|---|
-| `refusing to dial …: not in ALLOWED_DEMO_PHONES` | Add the number (E.164, `+91…`) to `ALLOWED_DEMO_PHONES` in `.env`. Working as designed. |
-| Phone never rings, script waits then reports `no_answer` | CALL-E dials India via a shared international pool — carrier spam screening (Jio/Truecaller/"silence unknown callers") may eat the call. Whitelist unknown callers for the test, or try a phone on another carrier. Check the call's status in the CALL-E dashboard. |
-| `--brain strands needs GROQ_API_KEY` | Set `GROQ_API_KEY` in `.env`, or use the default engine brain. |
-| `CALLE_API_KEY is not set` from `test_call` | Real calls need the CALL-E key in `.env`. |
+| `refusing to dial …: not in ALLOWED_DEMO_PHONES` | Add the number (E.164) to `ALLOWED_DEMO_PHONES`. This is working as designed. |
+| Phone never rings, outcome `no_answer` | CALL-E calls India from a shared international pool, which spam filters may block. Allow unknown callers, try another carrier, or see the Vobiz option in [docs/TELEPHONY.md](docs/TELEPHONY.md). |
+| `--brain strands needs GROQ_API_KEY` | Set `GROQ_API_KEY`, or use the default engine. |
+| `port 8790 is already in use` | `PORT=8791 npm run local` |
+
+## Beyond clinics
+
+Clinics come first, not only. The same loop fits any business that sells time slots: diagnostic labs (home collection), salons, car service, field service, homestays, classes and courts. The plan is one engine with a config per business type; see [PRD §7](docs/PRD.md#7-business-types-planned-not-built). Today the demo is a dental clinic.
+
+## References
+
+- Agent brain: [Strands Agents](https://strandsagents.com), [Groq](https://console.groq.com)
+- Telephony: [CALL-E](https://heycall-e.com), [Vobiz docs](https://vobiz.ai/docs/), [Bolna × Vobiz](https://www.bolna.ai/integrations/vobiz), [Pipecat](https://github.com/pipecat-ai/pipecat), [LiveKit Agents](https://github.com/livekit/agents)
+- Hosting: [Workers static assets](https://developers.cloudflare.com/workers/static-assets/), [Cron Triggers](https://developers.cloudflare.com/workers/configuration/cron-triggers/), [Quick tunnels](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/)
+- India calling rules: [TRAI amendment (Securiti)](https://securiti.ai/india-spam-rules-trai-latest-amendment/), [SIP providers for AI calling (Edesy)](https://edesy.in/blog/sip-trunk-providers-india-ai-calling-2026)

@@ -11,7 +11,7 @@ import unittest
 from unittest import mock
 
 from slotsaver import board
-from slotsaver.caller import ConfirmResult
+from slotsaver.caller import ConfirmResult, StopRun
 from slotsaver.demo_data import demo_state, real_demo_state
 from slotsaver.run_demo import max_calls
 
@@ -22,9 +22,9 @@ PHONE = "+919800000000"  # fictional; the client below is a mock
 @unittest.skipUnless(HAS_CALLE, "calle-ai not installed")
 class TestCalleErrors(unittest.TestCase):
     def _caller(self, error):
-        from slotsaver.calle_caller import CalleCaller
+        from slotsaver.providers.calle import CalleCaller
 
-        with mock.patch("slotsaver.calle_caller.CalleClient") as client_cls:
+        with mock.patch("slotsaver.providers.calle.CalleClient") as client_cls:
             client_cls.return_value.calls.create_and_wait.side_effect = error
             caller = CalleCaller("test-key")
         return caller
@@ -46,7 +46,7 @@ class TestCalleErrors(unittest.TestCase):
         from calle import CalleAuthenticationError
 
         error = CalleAuthenticationError(code="unauthorized", message="bad key", status_code=401)
-        with self.assertRaises(CalleAuthenticationError):
+        with self.assertRaises(StopRun):
             self._caller(error).confirm_call(self._appt(), "Test Clinic")
 
 

@@ -21,18 +21,26 @@ build (tag `hackathon-submission-2026-09-14`) until judging is over.
 - [x] Token sent in an `X-SlotSaver-Token` header on GET routes instead of the query string
 - [x] Python: CALL-E SDK errors become `wrong_person_or_unclear` (a bad API key still stops the run); board push runs in the background; `--real` prints the worst-case call count
 - [x] `npm run local`: test, clean, build (site/ + Worker dry run + login check), then the board with a mock run
+- [x] `npm run local:tunnel`: same plus a public quick-tunnel link; the board server serves only `.serve/`, never the repo root
 - [ ] Deploy with `npx wrangler deploy` once judging is over (rebuild `site/` first: the board and Worker changed together)
 - [ ] Rehearse once with `--take`, then one real `--real` check
+- [x] `VobizCaller`: Vobiz number via a Bolna agent behind `Caller`, chosen with `CALLER=calle|vobiz`; call wording shared in `providers/scripts.py`; tests in `tests/test_vobiz.py`
+- [x] Real providers moved to `slotsaver/providers/` (`calle.py`, `vobiz.py`, shared `scripts.py`, `real_caller` factory)
+- [x] `StopRun` (bad key, low balance) now stops the agent brain too: `EveningTools` refuses every later call
+- [x] Bolna shapes checked against its docs (nested `extracted_data`, guardrail reschedules); local end-to-end test over HTTP against a fake Bolna server
+- [ ] Vobiz: set up the Bolna agent (TELEPHONY.md §6), then one real `test_call` with `CALLER=vobiz`
 
 ## Backlog
 
 | Item | Notes |
 |---|---|
 | Real clinic sheets | Google Sheets / Practo export behind the same `ClinicState` |
+| Global-ready core | Business config (country, time zone, currency, language, type), consent guard in `tools.py`, voice enabled per country, per-time-zone scheduling, opt-out, approval mode with an audit log. See [PRD.md §8](PRD.md#8-next-version-global-ready-planned-not-built) |
+| Vobiz in the Worker + router | Bolna `fetch` calls in the hosted Worker; then a router for both providers. See [TELEPHONY.md](TELEPHONY.md) |
 | Multilingual calls | CALL-E locales, starting with Hindi |
 | WhatsApp morning report | Send the report to the clinic owner |
 | Rebooking flow | Handle reschedules instead of handing them back to the clinic |
-| Other verticals | Salons, physio, diagnostic labs, tuition, driving schools |
+| Second business type | Labs (home collection) or salons, chosen after the clinic pilots. Must work by config only, with no engine changes. Order in [PRD.md §7](PRD.md#7-business-types-planned-not-built) |
 
 ## Done
 

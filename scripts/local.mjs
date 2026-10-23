@@ -15,12 +15,15 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { connect } from "node:net";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline/promises";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
-const PORT = process.env.PORT || "8787";
+// Not 8787: that is wrangler dev's default, so other projects often hold it.
+const PORT = process.env.PORT || "8790";
 const IS_WIN = process.platform === "win32";
 
 // wrangler's own entry point, run with this Node: no npx, no shell, so
@@ -146,9 +149,26 @@ function prepareServeDir() {
   writeFileSync(join(SERVE_DIR, "index.html"), SERVE_INDEX);
 }
 
-function serveAndRun(demoArgs, { tunnel = false } = {}) {
+/** True when something already accepts connections on the port. Checked by
+ * connecting, because Python's server can bind a busy port on Windows
+ * without an error and then never receive the requests. */
+function portInUse(port) {
+  return new Promise((resolve) => {
+    const socket = connect({ host: "127.0.0.1", port: Number(port) });
+    socket.setTimeout(1000);
+    socket.once("connect", () => { socket.destroy(); resolve(true); });
+    socket.once("timeout", () => { socket.destroy(); resolve(false); });
+    socket.once("error", () => resolve(false));
+  });
+}
+
+async function serveAndRun(demoArgs, { tunnel = false } = {}) {
   if (demoArgs.includes("--real")) {
     console.error("✖ `npm run local` is mock only. Real calls are a manual command, see README section 6.");
+    process.exit(1);
+  }
+  if (await portInUse(PORT)) {
+    console.error(`✖ port ${PORT} is already in use (another dev server?). Pick another, e.g. PORT=8791 npm run local`);
     process.exit(1);
   }
   const cloudflared = tunnel ? findCloudflared() : null;
@@ -203,28 +223,51 @@ function findCloudflared() {
 }
 
 /** A Cloudflare quick tunnel: no account or login, a random
- * https://*.trycloudflare.com URL that lives until Ctrl+C. */
+ * https://*.trycloudflare.com URL that lives until Ctrl+C.
+ *
+ * It runs with an empty --config: otherwise cloudflared also loads
+ * ~/.cloudflared/config.yml, whose named-tunnel ingress rules override
+ * --url and turn every request into a 404. */
 function startTunnel(cloudflared) {
   step("tunnel: public link (anyone with it can view the board)");
-  const proc = spawn(cloudflared, ["tunnel", "--no-autoupdate", "--url", `http://127.0.0.1:${PORT}`], {
-    cwd: ROOT,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let shown = false;
+  const config = join(tmpdir(), "slotsaver-quick-tunnel.yml");
+  writeFileSync(config, "# empty on purpose: keep ~/.cloudflared/config.yml out of quick tunnels\n");
+  const proc = spawn(
+    cloudflared,
+    ["tunnel", "--config", config, "--no-autoupdate", "--url", `http://127.0.0.1:${PORT}`],
+    { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] }
+  );
+  let found = null;
   const watch = (chunk) => {
-    const url = !shown && String(chunk).match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+    const url = !found && String(chunk).match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
     if (url) {
-      shown = true;
-      console.log(`\n🌐 public board: ${url[0]}/demo_board.html`);
-      console.log("   it serves only the board files from .serve/ (fictional demo data)\n");
+      found = url[0];
+      announceWhenReady(`${found}/demo_board.html`);
     }
   };
   proc.stdout.on("data", watch);
   proc.stderr.on("data", watch);
   proc.on("exit", (code) => {
-    if (!shown) console.error(`✖ cloudflared exited (code ${code}) before giving a URL`);
+    if (!found) console.error(`✖ cloudflared exited (code ${code}) before giving a URL`);
   });
   return proc;
+}
+
+/** cloudflared prints the URL a few seconds before its DNS name resolves,
+ * so only show it once the board actually loads through it. */
+async function announceWhenReady(url) {
+  for (let i = 0; i < 30; i++) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+      if (res.ok) {
+        console.log(`\n🌐 public board: ${url}`);
+        console.log("   it serves only the board files from .serve/ (fictional demo data)\n");
+        return;
+      }
+    } catch { /* DNS not ready yet */ }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  console.error(`✖ the tunnel URL never answered: ${url}`);
 }
 
 const argv = process.argv.slice(2);
@@ -236,9 +279,9 @@ if (task === "all" || task === "tunnel") {
   test();
   clean();
   await build();
-  serveAndRun(rest, { tunnel: task === "tunnel" });
+  await serveAndRun(rest, { tunnel: task === "tunnel" });
 } else if (task === "run") {
-  serveAndRun(rest);
+  await serveAndRun(rest);
 } else if (steps[task]) {
   await steps[task]();
 } else {

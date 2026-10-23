@@ -9,6 +9,7 @@
 | [docs/PRD.md](docs/PRD.md) | You need to know what it does, who it's for, and what's out of scope |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | You're changing code: stack, flow, modules, Worker routes |
 | [docs/RULES.md](docs/RULES.md) | **Always**, before touching calls, secrets or git |
+| [docs/TELEPHONY.md](docs/TELEPHONY.md) | You're adding or changing a call provider (CALL-E, Vobiz, a router) |
 | [docs/DESIGN.md](docs/DESIGN.md) | You're changing the board UI or call wording |
 | [docs/TASKS.md](docs/TASKS.md) | You're picking up work or recording progress |
 
@@ -18,6 +19,7 @@
 
 ```
 npm run local                                                    # test → clean → build → board + mock run (mock only)
+npm run local:tunnel                                             # same, plus a public trycloudflare.com link
 npm test                                                         # both test suites
 .venv\Scripts\python.exe -m unittest discover tests              # tests (no keys, no calls)
 node --test tests/worker_evening.test.mjs                        # Worker loop tests (no keys, no calls)

@@ -12,7 +12,7 @@
 | Live board | Single static `demo_board.html` |
 | Hosting | Cloudflare Worker + static assets + KV + Cron Trigger |
 | Tests | stdlib `unittest`; `node --test` for the Worker loop |
-| Local tasks | `scripts/local.mjs` behind `npm run local / test / clean / build / board` |
+| Local tasks | `scripts/local.mjs` behind `npm run local / local:tunnel / test / clean / build / board`; serves only `.serve/` on 127.0.0.1:8790, quick tunnel via `cloudflared` |
 
 ## 2. Flow
 
@@ -24,7 +24,7 @@ demo_data.py ──► ClinicState
                      ▼
                tools.py — guards: cancelled slots only, waitlist order, ≤2 calls/person
                      ▼
-      Caller: MockCaller (default)  or  CalleCaller (real, allowlisted)
+      Caller: MockCaller (default)  or  CalleCaller / VobizCaller (real, allowlisted, CALLER=calle|vobiz)
                      │
       on_change ──► board.py ──► board.json  (+ optional push to Worker)
                      │
@@ -38,9 +38,12 @@ demo_data.py ──► ClinicState
 | `models.py` | `SlotStatus`, `Appointment`, `WaitlistEntry`, `ClinicState` (with the `on_change` hook) |
 | `demo_data.py` | Fictional clinic sheet (full scenario + 3-call real cast) |
 | `config.py` | `.env` loading, mock-by-default switches |
-| `caller.py` | `Caller` protocol + scripted `MockCaller` |
-| `calle_caller.py` | Real calls: allowlist check, create and poll, per-run idempotency keys. A failed call or invalid result becomes `wrong_person_or_unclear` |
-| `tools.py` | `EveningTools`: the only code that changes state during a run, with the rule guards (`GuardError`) |
+| `caller.py` | `Caller` protocol, scripted `MockCaller`, `StopRun`, the `ALLOWED_DEMO_PHONES` check |
+| `providers/__init__.py` | `real_caller(config)`: builds the provider `CALLER` picks |
+| `providers/scripts.py` | Asha's call wording and ops-log summaries, shared by every real provider |
+| `providers/calle.py` | CALL-E: create and poll, per-run idempotency keys. A failed call or invalid result becomes `wrong_person_or_unclear` |
+| `providers/vobiz.py` | Vobiz number + Bolna agent over Bolna's REST API (stdlib only). No idempotency key, so a failed start is never re-sent. See [TELEPHONY.md §6](TELEPHONY.md#6-vobiz-via-bolna-setup) |
+| `tools.py` | `EveningTools`: the only code that changes state during a run, with the rule guards (`GuardError`). After a `StopRun` it refuses every later call |
 | `engine.py` | Deterministic evening loop over `EveningTools` |
 | `agent.py` | Strands agent wrapping `EveningTools`: `get_worklist`, `confirm_call`, `offer_slot`, `get_morning_report` |
 | `board.py` | Atomic `board.json` writes, opt-in push (`BOARD_PUSH_URL` + `BOARD_PUSH_TOKEN`) |

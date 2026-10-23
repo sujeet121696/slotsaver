@@ -7,7 +7,7 @@ instructions still can't overwrite a confirmed patient, skip the waitlist
 order or call someone a third time.
 """
 
-from .caller import Caller, CallOutcome, ConfirmResult, OfferResult
+from .caller import Caller, CallOutcome, ConfirmResult, OfferResult, StopRun
 from .models import Appointment, ClinicState, SlotStatus, WaitlistEntry
 
 MAX_CALLS_PER_PERSON = 2
@@ -26,6 +26,18 @@ class EveningTools:
         self._retry_pending: set[str] = set()  # appointments owed their one retry
         self._offered: dict[str, set[str]] = {}  # appointment id -> waitlist ids offered
         self._backfill_paused: set[str] = set()  # slots waiting on a human
+        # The first StopRun from the caller. Kept here, not only raised,
+        # because Strands turns a tool's exception into text for the model,
+        # which could then try the next call anyway.
+        self.stopped: StopRun | None = None
+
+    def _dial(self, place_call, *args) -> CallOutcome:
+        try:
+            return place_call(*args)
+        except StopRun as err:
+            self.stopped = err
+            self.state.log(f"Run stopped: {err}")
+            raise
 
     def appointment(self, appointment_id: str) -> Appointment:
         for appt in self.state.appointments:
@@ -35,6 +47,8 @@ class EveningTools:
 
     def confirm(self, appointment_id: str) -> CallOutcome:
         """Confirm call, or the one retry after a no-answer."""
+        if self.stopped is not None:
+            raise self.stopped
         appt = self.appointment(appointment_id)
         is_retry = appt.id in self._retry_pending
         if not is_retry and appt.status is not SlotStatus.SCHEDULED:
@@ -43,7 +57,7 @@ class EveningTools:
             )
         self._count_call(appt.id)
 
-        outcome = self.caller.confirm_call(appt, self.state.clinic_name)
+        outcome = self._dial(self.caller.confirm_call, appt, self.state.clinic_name)
         self._retry_pending.discard(appt.id)
         self.state.log(f"{'Retry call' if is_retry else 'Confirm call'} → {outcome.summary}")
 
@@ -86,6 +100,8 @@ class EveningTools:
 
     def offer(self, waitlist_id: str, appointment_id: str) -> CallOutcome:
         """Offer a cancelled slot to the next waitlist entry, in order."""
+        if self.stopped is not None:
+            raise self.stopped
         appt = self.appointment(appointment_id)
         if appt.status is not SlotStatus.CANCELLED:
             raise GuardError(
@@ -103,7 +119,9 @@ class EveningTools:
         self._count_call(candidate.id)
         self._offered.setdefault(appt.id, set()).add(candidate.id)
 
-        outcome = self.caller.offer_call(candidate, appt, self.state.clinic_name)
+        outcome = self._dial(
+            self.caller.offer_call, candidate, appt, self.state.clinic_name
+        )
         self.state.log(f"Backfill call → {outcome.summary}")
         if outcome.result is OfferResult.ACCEPTED:
             appt.status = SlotStatus.BACKFILLED

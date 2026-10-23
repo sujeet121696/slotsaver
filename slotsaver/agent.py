@@ -16,7 +16,7 @@ import json
 from strands import Agent, tool
 from strands.models.openai import OpenAIModel
 
-from .caller import Caller
+from .caller import Caller, StopRun
 from .config import Config
 from .models import ClinicState
 from .tools import EveningTools, GuardError
@@ -44,10 +44,10 @@ Work step by step and place one call at a time. If a tool returns an error,
 read it: it tells you what the rules allow next."""
 
 
-def build_agent(state: ClinicState, caller: Caller, config: Config) -> Agent:
-    """Wires the shared clinic state and a Caller into a Strands agent."""
+def build_agent(tools: EveningTools, config: Config) -> Agent:
+    """Wires the evening's tools (clinic state + Caller) into a Strands agent."""
 
-    tools = EveningTools(state, caller)
+    state = tools.state
 
     @tool
     def get_worklist() -> str:
@@ -80,6 +80,8 @@ def build_agent(state: ClinicState, caller: Caller, config: Config) -> Agent:
             outcome = tools.confirm(appointment_id)
         except GuardError as err:
             return f"error: {err}"
+        except StopRun as err:
+            return f"error: run stopped, place no more calls: {err}"
         return json.dumps({"result": outcome.result.value, "summary": outcome.summary})
 
     @tool
@@ -91,6 +93,8 @@ def build_agent(state: ClinicState, caller: Caller, config: Config) -> Agent:
             outcome = tools.offer(waitlist_id, appointment_id)
         except GuardError as err:
             return f"error: {err}"
+        except StopRun as err:
+            return f"error: run stopped, place no more calls: {err}"
         return json.dumps({"result": outcome.result.value, "summary": outcome.summary})
 
     @tool
@@ -115,9 +119,16 @@ def build_agent(state: ClinicState, caller: Caller, config: Config) -> Agent:
 
 
 def run_evening_agent(state: ClinicState, caller: Caller, config: Config) -> str:
-    """Runs the whole evening as one agent conversation; returns its report."""
-    agent = build_agent(state, caller, config)
+    """Runs the whole evening as one agent conversation; returns its report.
+
+    A StopRun raised mid-run is re-raised here once the agent finishes, so
+    the run ends with the same error as the engine brain instead of a
+    report that hides it."""
+    tools = EveningTools(state, caller)
+    agent = build_agent(tools, config)
     result = agent(
         "It's 7pm — run tonight's confirmation round for tomorrow's schedule."
     )
+    if tools.stopped is not None:
+        raise tools.stopped
     return str(result)

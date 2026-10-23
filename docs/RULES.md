@@ -16,7 +16,7 @@ Real calls cost money and ring real phones.
 - Never run `test_call` or `--real` yourself. Suggest the command instead.
 - Keep the typed-`yes` gate. Calls go one at a time, and nothing is queued.
 - Idempotency keys must be unique per run (CALL-E dedupes them forever).
-- A failed or unreadable call is `wrong_person_or_unclear`, never `no_answer` or a cancellation. Only a rejected API key stops the run.
+- A failed or unreadable call is `wrong_person_or_unclear`, never `no_answer` or a cancellation. Only a rejected API key or an empty provider balance stops the run (`StopRun`); `EveningTools` then refuses every later call, so the agent brain can't keep dialing.
 - Call tasks never tell the bot to press keys or wait on hold. Calls stay under about 45 seconds.
 
 ## 3. Hosted Worker

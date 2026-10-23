@@ -10,7 +10,9 @@
                 until smooth, then swap it for --real.
 --real          PLACE REAL PHONE CALLS (~3 calls, spends credits) using the
                 same trimmed cast, your allowlisted phone playing every
-                patient. Needs CALLE_API_KEY + ALLOWED_DEMO_PHONES.
+                patient. Needs ALLOWED_DEMO_PHONES plus the keys of the
+                provider CALLER picks: CALLE_API_KEY (calle, default) or
+                BOLNA_API_KEY + BOLNA_AGENT_ID (vobiz).
 
 Every run also writes board.json after each state change — serve the live
 board with `python3 -m http.server 8787` and open
@@ -27,10 +29,11 @@ import sys
 import time
 
 from .board import attach_board
-from .caller import ConfirmResult, MockCaller, OfferResult
+from .caller import ConfirmResult, MockCaller, OfferResult, allowed_phones
 from .config import load_config
 from .demo_data import demo_state, real_demo_state
 from .engine import run_evening
+from .providers import LABELS, real_caller
 from .tools import MAX_CALLS_PER_PERSON
 
 
@@ -86,8 +89,8 @@ def build_caller(config):
     if config.real_calls_enabled:
         # Rehearsals stay on the mock (zero credits); real calls need the
         # explicit --real flag.
-        print("note: CALLE_API_KEY is set — pass --real to place real calls; "
-              "this run uses the mock\n")
+        print(f"note: {LABELS[config.caller]} keys are set — pass --real "
+              "to place real calls; this run uses the mock\n")
     return MockCaller(
         confirm_script={
             "+919800000002": [ConfirmResult.CANCELLED],
@@ -112,10 +115,8 @@ def main() -> None:
     config = load_config()
 
     if "--real" in sys.argv:
-        from .calle_caller import CalleCaller, allowed_phones
-
         if not config.real_calls_enabled:
-            raise SystemExit("--real needs CALLE_API_KEY in .env")
+            raise SystemExit(f"--real needs {config.missing_call_keys} in .env")
         phones = sorted(allowed_phones())
         if not phones:
             raise SystemExit("--real needs ALLOWED_DEMO_PHONES in .env")
@@ -138,13 +139,7 @@ def main() -> None:
             patient_name=config.test_patient_name,
             doctor=config.doctor_name,
         )
-        caller = CalleCaller(
-            config.calle_api_key,
-            config.agent_persona,
-            region=config.calle_region,
-            locale=config.calle_locale,
-            timeout_seconds=config.calle_timeout_seconds,
-        )
+        caller = real_caller(config)
         calls = len(state.appointments) + len(state.waitlist)
         print(
             f"REAL CALLS: about to dial {phone} {calls} times if everyone answers, "
@@ -193,7 +188,11 @@ def main() -> None:
 
     attach_board(state)
 
-    caller_label = "real calls (CALL-E)" if "--real" in sys.argv else "mock caller"
+    caller_label = (
+        f"real calls ({LABELS[config.caller]})"
+        if "--real" in sys.argv
+        else "mock caller"
+    )
     print(f"SlotSaver evening run — {state.clinic_name} — {caller_label} — brain: {brain}\n")
 
     if brain == "strands":
