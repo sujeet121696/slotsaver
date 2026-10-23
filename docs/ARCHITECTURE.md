@@ -1,0 +1,88 @@
+# Architecture
+
+> How SlotSaver is built. Update this when modules, routes or the stack change.
+
+## 1. Stack
+
+| Layer | Tech |
+|---|---|
+| Agent brain | AWS Strands Agents SDK, LLM on Groq (any OpenAI-compatible endpoint) |
+| Fallback brain | Plain Python, no dependencies |
+| Telephony | CALL-E (`calle-ai`): task + JSON `result_schema` gives structured outcomes |
+| Live board | Single static `demo_board.html` |
+| Hosting | Cloudflare Worker + static assets + KV + Cron Trigger |
+| Tests | stdlib `unittest`; `node --test` for the Worker loop |
+| Local tasks | `scripts/local.mjs` behind `npm run local / local:tunnel / test / clean / build / board`; serves only `.serve/` on 127.0.0.1:8790, quick tunnel via `cloudflared` |
+
+## 2. Flow
+
+```
+demo_data.py ──► ClinicState
+                     │
+      brain: agent.py (Strands)  or  engine.py (deterministic)
+                     │  both drive tools.py (EveningTools): the only state changes
+                     ▼
+               tools.py — guards: cancelled slots only, waitlist order, ≤2 calls/person
+                     ▼
+      Caller: MockCaller (default)  or  CalleCaller / VobizCaller (real, allowlisted, CALLER=calle|vobiz)
+                     │
+      on_change ──► board.py ──► board.json  (+ optional push to Worker)
+                     │
+               morning report
+```
+
+## 3. Python modules (`slotsaver/`)
+
+| File | Role |
+|---|---|
+| `models.py` | `SlotStatus`, `Appointment`, `WaitlistEntry`, `ClinicState` (with the `on_change` hook) |
+| `demo_data.py` | Fictional clinic sheet (full scenario + 3-call real cast) |
+| `config.py` | `.env` loading, mock-by-default switches |
+| `caller.py` | `Caller` protocol, scripted `MockCaller`, `StopRun`, the `ALLOWED_DEMO_PHONES` check |
+| `providers/__init__.py` | `real_caller(config)`: builds the provider `CALLER` picks |
+| `providers/scripts.py` | Asha's call wording and ops-log summaries, shared by every real provider |
+| `providers/calle.py` | CALL-E: create and poll, per-run idempotency keys. A failed call or invalid result becomes `wrong_person_or_unclear` |
+| `providers/vobiz.py` | Vobiz number + Bolna agent over Bolna's REST API (stdlib only). No idempotency key, so a failed start is never re-sent. See [TELEPHONY.md §6](TELEPHONY.md#6-vobiz-via-bolna-setup) |
+| `tools.py` | `EveningTools`: the only code that changes state during a run, with the rule guards (`GuardError`). After a `StopRun` it refuses every later call |
+| `engine.py` | Deterministic evening loop over `EveningTools` |
+| `agent.py` | Strands agent wrapping `EveningTools`: `get_worklist`, `confirm_call`, `offer_slot`, `get_morning_report` |
+| `board.py` | Atomic `board.json` writes, opt-in push (`BOARD_PUSH_URL` + `BOARD_PUSH_TOKEN`) |
+| `run_demo.py` | CLI entry: `--brain`, `--slow N`, `--take`, `--real <phone>` |
+| `test_call.py` | Places exactly one real call |
+
+`strands` and `calle` are imported lazily, only when that brain or caller is used, so the dry run needs no packages.
+
+## 4. Cloudflare Worker (`worker/`)
+
+- `index.js`: routes, KV, the lock, rate limits and CALL-E `fetch`.
+- `evening.mjs`: the evening loop as a pure state machine. `index.js` passes in the CALL-E calls and the extra-call charge, and `tests/worker_evening.test.mjs` drives it with fakes.
+
+- Serves `site/` through the `ASSETS` binding.
+- KV `RATE_LIMIT` holds cooldowns, the autorun flag and evening-run state.
+- `scheduled()` drives the Cron autorun (window set in `wrangler.jsonc`).
+
+| Route | Purpose |
+|---|---|
+| `GET /api/numbers` | Masked allowlist (label + opaque id) |
+| `POST/GET /api/call` | Place one real call / poll its outcome |
+| `POST/GET /api/board` | Receive / serve a live board snapshot |
+| `GET /api/evening/preview` | Cast for the evening run, nothing called yet |
+| `GET/POST /api/evening/autorun` | Read / toggle the Cron autorun |
+| `POST /api/evening/start`, `/step` | Run the evening sequence (supports `dryRun`) |
+
+Every route needs the `CALL_TRIGGER_TOKEN`: in the JSON body for POST, in the `X-SlotSaver-Token` header for GET (never the query string). Without it, the route returns a flat `403`.
+
+- Idempotency keys carry a per-run `runId`, so a second run on the same day dials instead of getting cached calls.
+- A real evening run, manual or Cron, is charged against the same cooldown and daily cap as single calls: one unit per appointment and waitlist entry up front, then one more for each retry or repeat offer. If the daily cap says no mid-run, that call isn't placed and the slot is left for the clinic.
+- A real run can't start while another real run is running.
+- After 5 failed steps in a row (CALL-E errors), the run stops and flags whatever is still `scheduled`.
+
+> ⚠️ The evening loop exists twice: in Python (`engine.py`/`agent.py`) and in JavaScript (the Worker). Keep them consistent.
+
+## 5. Config and secrets
+
+| Where | What |
+|---|---|
+| `.env` (template `.env.example`) | Local keys, allowlist, branding, board push |
+| Worker secrets (names in `.dev.vars.example`) | `CALLE_API_KEY`, `ALLOWED_DEMO_PHONES`, `CALL_TRIGGER_TOKEN` |
+| Gitignored, generated | `site/`, `board.json` |

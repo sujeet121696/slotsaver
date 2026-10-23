@@ -37,6 +37,9 @@ board.json
 # Cloudflare Pages deploy folder — regenerated from demo_board.html
 site/
 
+# What `npm run local` serves (board files only, never the repo root)
+.serve/
+
 # Reference-only material, never committed (same rule as resolve)
 backup/
 

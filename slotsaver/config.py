@@ -3,6 +3,9 @@
 Nothing here is hardcoded: swap CALLE_API_KEY (or any setting) in .env and the
 app picks it up on next start — no code changes. With no key set, the app runs
 with the MockCaller, so local testing never requires credentials.
+
+CALLER picks the real provider: calle (default) or vobiz (Bolna on a Vobiz
+number, see docs/TELEPHONY.md). Only the chosen provider's keys are needed.
 """
 
 import os
@@ -15,7 +18,7 @@ def _load_dotenv(path: Path) -> None:
     """Minimal .env loader (KEY=VALUE lines); real env vars take precedence."""
     if not path.exists():
         return
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -34,12 +37,20 @@ def _load_dotenv(path: Path) -> None:
             os.environ[key] = value
 
 
+CALLERS = ("calle", "vobiz")
+
+
 @dataclass(frozen=True)
 class Config:
+    caller: str
     calle_api_key: str | None
     calle_region: str
     calle_locale: str
     calle_timeout_seconds: float
+    bolna_api_key: str | None
+    bolna_agent_id: str | None
+    vobiz_from_number: str | None
+    bolna_timeout_seconds: float
     clinic_name: str
     agent_persona: str
     doctor_name: str
@@ -50,7 +61,16 @@ class Config:
 
     @property
     def real_calls_enabled(self) -> bool:
+        if self.caller == "vobiz":
+            return bool(self.bolna_api_key and self.bolna_agent_id)
         return bool(self.calle_api_key)
+
+    @property
+    def missing_call_keys(self) -> str:
+        """What .env still needs for real calls on the chosen provider."""
+        if self.caller == "vobiz":
+            return "BOLNA_API_KEY and BOLNA_AGENT_ID (CALLER=vobiz)"
+        return "CALLE_API_KEY"
 
     @property
     def agent_brain_enabled(self) -> bool:
@@ -59,11 +79,19 @@ class Config:
 
 def load_config(env_file: str | Path = ".env") -> Config:
     _load_dotenv(Path(env_file))
+    caller = os.environ.get("CALLER", "calle").strip().lower() or "calle"
+    if caller not in CALLERS:
+        raise SystemExit(f"CALLER={caller} is unknown, use one of: {', '.join(CALLERS)}")
     return Config(
+        caller=caller,
         calle_api_key=os.environ.get("CALLE_API_KEY") or None,
         calle_region=os.environ.get("CALLE_REGION", "IN"),
         calle_locale=os.environ.get("CALLE_LOCALE", "en-US"),
         calle_timeout_seconds=float(os.environ.get("CALLE_TIMEOUT_SECONDS", "300")),
+        bolna_api_key=os.environ.get("BOLNA_API_KEY") or None,
+        bolna_agent_id=os.environ.get("BOLNA_AGENT_ID") or None,
+        vobiz_from_number=os.environ.get("VOBIZ_FROM_NUMBER") or None,
+        bolna_timeout_seconds=float(os.environ.get("BOLNA_TIMEOUT_SECONDS", "300")),
         clinic_name=os.environ.get("CLINIC_NAME", "Dr. Meera's Dental Clinic"),
         agent_persona=os.environ.get("AGENT_PERSONA", "Asha"),
         doctor_name=os.environ.get("DOCTOR_NAME", "Dr. Meera"),

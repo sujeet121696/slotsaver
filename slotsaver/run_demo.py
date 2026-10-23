@@ -10,7 +10,9 @@
                 until smooth, then swap it for --real.
 --real          PLACE REAL PHONE CALLS (~3 calls, spends credits) using the
                 same trimmed cast, your allowlisted phone playing every
-                patient. Needs CALLE_API_KEY + ALLOWED_DEMO_PHONES.
+                patient. Needs ALLOWED_DEMO_PHONES plus the keys of the
+                provider CALLER picks: CALLE_API_KEY (calle, default) or
+                BOLNA_API_KEY + BOLNA_AGENT_ID (vobiz).
 
 Every run also writes board.json after each state change — serve the live
 board with `python3 -m http.server 8787` and open
@@ -27,10 +29,12 @@ import sys
 import time
 
 from .board import attach_board
-from .caller import ConfirmResult, MockCaller, OfferResult
+from .caller import ConfirmResult, MockCaller, OfferResult, allowed_phones
 from .config import load_config
 from .demo_data import demo_state, real_demo_state
 from .engine import run_evening
+from .providers import LABELS, real_caller
+from .tools import MAX_CALLS_PER_PERSON
 
 
 def _ensure_utf8_stdio() -> None:
@@ -42,6 +46,23 @@ def _ensure_utf8_stdio() -> None:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
+
+
+def _flag_value(flag: str) -> str:
+    """The value after a flag, with a usage error instead of an IndexError."""
+    idx = sys.argv.index(flag)
+    if idx + 1 >= len(sys.argv) or sys.argv[idx + 1].startswith("--"):
+        raise SystemExit(f"{flag} needs a value")
+    return sys.argv[idx + 1]
+
+
+def max_calls(state) -> int:
+    """Worst case for one evening, from the tools.py rules: each appointment
+    gets a confirm plus at most one retry, and each waitlist person is
+    called at most MAX_CALLS_PER_PERSON times (once per cancelled slot)."""
+    appts = len(state.appointments)
+    offers_each = min(MAX_CALLS_PER_PERSON, appts)
+    return 2 * appts + offers_each * len(state.waitlist)
 
 
 class SlowCaller:
@@ -68,8 +89,8 @@ def build_caller(config):
     if config.real_calls_enabled:
         # Rehearsals stay on the mock (zero credits); real calls need the
         # explicit --real flag.
-        print("note: CALLE_API_KEY is set — pass --real to place real calls; "
-              "this run uses the mock\n")
+        print(f"note: {LABELS[config.caller]} keys are set — pass --real "
+              "to place real calls; this run uses the mock\n")
     return MockCaller(
         confirm_script={
             "+919800000002": [ConfirmResult.CANCELLED],
@@ -87,17 +108,15 @@ def main() -> None:
 
     brain = "engine"
     if "--brain" in sys.argv:
-        brain = sys.argv[sys.argv.index("--brain") + 1]
+        brain = _flag_value("--brain")
     if brain not in ("engine", "strands"):
         raise SystemExit(f"unknown brain '{brain}' — use engine or strands")
 
     config = load_config()
 
     if "--real" in sys.argv:
-        from .calle_caller import CalleCaller, allowed_phones
-
         if not config.real_calls_enabled:
-            raise SystemExit("--real needs CALLE_API_KEY in .env")
+            raise SystemExit(f"--real needs {config.missing_call_keys} in .env")
         phones = sorted(allowed_phones())
         if not phones:
             raise SystemExit("--real needs ALLOWED_DEMO_PHONES in .env")
@@ -120,15 +139,12 @@ def main() -> None:
             patient_name=config.test_patient_name,
             doctor=config.doctor_name,
         )
-        caller = CalleCaller(
-            config.calle_api_key,
-            config.agent_persona,
-            region=config.calle_region,
-            locale=config.calle_locale,
-            timeout_seconds=config.calle_timeout_seconds,
-        )
+        caller = real_caller(config)
         calls = len(state.appointments) + len(state.waitlist)
-        print(f"REAL CALLS: about to dial {phone} ~{calls} times (spends credits).")
+        print(
+            f"REAL CALLS: about to dial {phone} {calls} times if everyone answers, "
+            f"up to {max_calls(state)} with retries (spends credits)."
+        )
         print(
             f"Answer as: {config.test_patient_name} (confirm) → "
             f"Priya (cancel) → Arjun (accept the slot)."
@@ -164,11 +180,19 @@ def main() -> None:
         caller = build_caller(config)
 
     if "--real" not in sys.argv and "--slow" in sys.argv:
-        caller = SlowCaller(caller, float(sys.argv[sys.argv.index("--slow") + 1]))
+        try:
+            delay = float(_flag_value("--slow"))
+        except ValueError:
+            raise SystemExit("--slow needs a number of seconds") from None
+        caller = SlowCaller(caller, delay)
 
     attach_board(state)
 
-    caller_label = "real calls (CALL-E)" if "--real" in sys.argv else "mock caller"
+    caller_label = (
+        f"real calls ({LABELS[config.caller]})"
+        if "--real" in sys.argv
+        else "mock caller"
+    )
     print(f"SlotSaver evening run — {state.clinic_name} — {caller_label} — brain: {brain}\n")
 
     if brain == "strands":

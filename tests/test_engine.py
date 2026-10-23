@@ -65,7 +65,7 @@ class TestEveningRun(unittest.TestCase):
 
     def test_take_scenario_matches_rehearsal(self):
         phone = "+919800000000"
-        state = real_demo_state("Test Clinic", phone, patient_name="Sujeet")
+        state = real_demo_state("Test Clinic", phone, patient_name="Rohit Sharma")
         caller = MockCaller(
             confirm_script={
                 phone: [ConfirmResult.CONFIRMED, ConfirmResult.CANCELLED],

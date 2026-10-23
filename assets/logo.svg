@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 64" width="280" height="64">
+  <rect x="4" y="8" width="56" height="52" rx="12" fill="#171c24"/>
+  <path d="M4 20a12 12 0 0 1 12-12h32a12 12 0 0 1 12 12v2H4z" fill="#b78bfa"/>
+  <rect x="17" y="3" width="6" height="12" rx="3" fill="#e6e9ee"/>
+  <rect x="41" y="3" width="6" height="12" rx="3" fill="#e6e9ee"/>
+  <rect x="11" y="28" width="19" height="11" rx="3" fill="#3a4352"/>
+  <rect x="34" y="28" width="19" height="11" rx="3" fill="#3a4352"/>
+  <rect x="11" y="43" width="19" height="11" rx="3" fill="#3a4352"/>
+  <rect x="34" y="43" width="19" height="11" rx="3" fill="#34c47c"/>
+  <path d="M38.5 48.5l3.5 3.5 6.5-6.5" fill="none" stroke="#0e1116" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="76" y="46" font-family="-apple-system, 'Segoe UI', Roboto, sans-serif" font-size="34" font-weight="800"><tspan fill="#8b94a3">Slot</tspan><tspan fill="#34c47c">Saver</tspan></text>
+</svg>

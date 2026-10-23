@@ -1,10 +1,15 @@
 """Caller abstraction: the engine talks to phones only through this interface.
 
-MockCaller scripts outcomes for local testing; CalleCaller (later) places real
-calls through CALL-E's plan_call -> run_call -> get_call_run loop. The engine
-never knows which one it's using.
+MockCaller scripts outcomes for local testing. The real providers live in
+slotsaver/providers/ (CALL-E, and Vobiz via Bolna). The engine never knows
+which one it's using.
+
+WRONG_PERSON_OR_UNCLEAR covers both "someone else picked up" and "the call
+gave us no usable result". Either way we don't know what happened, so it is
+never treated as a no-answer (no retry) or a cancellation (no slot freed).
 """
 
+import os
 from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
@@ -12,17 +17,42 @@ from typing import Protocol
 from .models import Appointment, WaitlistEntry
 
 
+class StopRun(RuntimeError):
+    """A provider problem every later call would hit too (a rejected API key,
+    an empty balance). Unlike a failed call, it stops the whole run."""
+
+
+def allowed_phones() -> set[str]:
+    """ALLOWED_DEMO_PHONES from .env. Every real provider checks this before
+    dialing; it lives here (not in a provider module) so no provider's SDK
+    has to be installed to read it."""
+    raw = os.environ.get("ALLOWED_DEMO_PHONES", "")
+    return {p.strip() for p in raw.split(",") if p.strip()}
+
+
+def require_allowed(phone: str) -> None:
+    """Raises unless the phone is allowlisted. Every real provider calls
+    this before it contacts its API."""
+    if phone not in allowed_phones():
+        raise RuntimeError(
+            f"refusing to dial {phone}: not in ALLOWED_DEMO_PHONES. "
+            "Real calls may only reach phones we own."
+        )
+
+
 class ConfirmResult(str, Enum):
     CONFIRMED = "confirmed"
     CANCELLED = "cancelled"
     RESCHEDULE = "reschedule"
     NO_ANSWER = "no_answer"
+    WRONG_PERSON_OR_UNCLEAR = "wrong_person_or_unclear"
 
 
 class OfferResult(str, Enum):
     ACCEPTED = "accepted"
     DECLINED = "declined"
     NO_ANSWER = "no_answer"
+    WRONG_PERSON_OR_UNCLEAR = "wrong_person_or_unclear"
 
 
 @dataclass
@@ -70,6 +100,7 @@ class MockCaller:
             ConfirmResult.CANCELLED: f'{appt.patient} cancelled {appt.time}',
             ConfirmResult.RESCHEDULE: f'{appt.patient} asked to reschedule {appt.time}',
             ConfirmResult.NO_ANSWER: f'{appt.patient} did not answer',
+            ConfirmResult.WRONG_PERSON_OR_UNCLEAR: f'unclear who answered for {appt.patient}',
         }
         return CallOutcome(result, summaries[result])
 
@@ -82,5 +113,6 @@ class MockCaller:
             OfferResult.ACCEPTED: f'{entry.name} accepted the {appt.time} slot',
             OfferResult.DECLINED: f'{entry.name} declined the {appt.time} slot',
             OfferResult.NO_ANSWER: f'{entry.name} did not answer',
+            OfferResult.WRONG_PERSON_OR_UNCLEAR: f'unclear who answered for {entry.name}',
         }
         return CallOutcome(result, summaries[result])
